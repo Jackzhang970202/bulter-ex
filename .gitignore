@@ -1,0 +1,45 @@
+# Python
+__pycache__/
+*.py[cod]
+*$py.class
+*.so
+*.egg
+*.egg-info/
+dist/
+build/
+*.whl
+
+# Virtual environments
+.venv/
+venv/
+env/
+
+# IDE
+.vscode/
+.idea/
+*.swp
+*.swo
+
+# Environment
+.env
+
+# Data (runtime)
+data/
+
+# Milvus / Qdrant
+milvus_data/
+*.sqlite
+*.db
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Documents output
+*.docx
+.claude/
+web/
+待沉淀的金融报告智能体/
+specs/
+seed/
+_internal/
