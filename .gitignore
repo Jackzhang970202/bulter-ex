@@ -43,3 +43,4 @@ web/
 specs/
 seed/
 _internal/
+*.md
