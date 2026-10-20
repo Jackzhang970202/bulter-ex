@@ -1,5 +1,6 @@
 """大屏服务：FastAPI，只读账本 + 4 个动作接口（审批/复盘/接入/暂停）+ 静态页面。
 端口默认 8420，仅监听 127.0.0.1（不出网）。"""
+import re
 import sys
 import threading
 from pathlib import Path
@@ -22,11 +23,22 @@ _allow = {"distill_max_input_chars": int, "reminder_hours": int,
 def state():
     s = repo.stats()
     s["version"] = __version__
+    s["data_dir"] = str(config.DATA)
     s["distill_progress"] = db.kv_get("distill_progress")
     s["digest_nonce"] = db.kv_get("digest_nonce")
     for p in s["connected"]:
         p["release_file"] = str(config.RELEASES / f"{config.project_hash(p['path'])}.md")
     return s
+
+
+@app.get("/vendor/{name}")
+def vendor(name: str):
+    """离线静态资源（marked.min.js 等），白名单文件名防穿越。"""
+    safe = re.sub(r"[^A-Za-z0-9._\-]", "", name)
+    f = (WEB / "vendor" / safe)
+    if not safe or not f.is_file():
+        raise HTTPException(404)
+    return FileResponse(str(f), headers={"Cache-Control": "public, max-age=86400"})
 
 
 @app.get("/api/digest")
@@ -49,7 +61,10 @@ def distill_cancel():
 
 @app.post("/api/decide")
 def decide(body: dict):
-    cid = int(body.get("id", 0))
+    try:
+        cid = int(body.get("id", 0))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "id")
     action = body.get("action")
     if action not in ("approve", "reject"):
         raise HTTPException(400, "action")
@@ -57,7 +72,8 @@ def decide(body: dict):
                                note=str(body.get("note", "")))
     if not ok:
         raise HTTPException(409, "候选不存在/已处理/校验不过")
-    renderer.render_all()
+    if action == "approve":                          # 拒绝不改变注入内容，不再空转版本号
+        renderer.render_all()
     return {"ok": True}
 
 
@@ -94,7 +110,11 @@ def uninstall(body: dict):
 
 @app.post("/api/pause")
 def pause(body: dict):
-    repo.set_pause(float(body.get("hours", 2)))
+    try:
+        hours = float(body.get("hours", 2))
+    except (TypeError, ValueError):
+        raise HTTPException(400, "hours")
+    repo.set_pause(hours)
     return {"ok": True}
 
 

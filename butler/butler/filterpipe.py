@@ -33,16 +33,26 @@ def ensure_default_rules():
 
 
 def sync_md_to_db():
-    """解析 md，UPSERT 进 filter_rules 表（保留 hits_total 计数）。"""
+    """解析 md，UPSERT 进 filter_rules 表（保留 hits_total 计数）。
+    md 内重复 pattern 行取首条；DB 撞 UNIQUE 容忍跳过——绝不能再让 `butler run`
+    因为用户手贴了一行重复正则而起不来。删后加回的规则自动复活为 active。"""
+    import sqlite3
     c = db.conn()
     existing = {r["pattern"]: r for r in c.execute("SELECT * FROM filter_rules")}
+    seen = set()
     for pat, cat, note in _parse_md():
+        if pat in seen:                       # 同一 md 内重复行：跳过，防 IntegrityError
+            continue
+        seen.add(pat)
         if pat in existing:
-            c.execute("UPDATE filter_rules SET category=?, note=? WHERE pattern=?",
-                      (cat, note, pat))
+            c.execute("UPDATE filter_rules SET category=?, note=?, status='active'"
+                      " WHERE pattern=?", (cat, note, pat))
         else:
-            c.execute("INSERT INTO filter_rules(pattern,category,note,status,created_by)"
-                      " VALUES(?,?,?,'active','seed')", (pat, cat, note))
+            try:
+                c.execute("INSERT INTO filter_rules(pattern,category,note,status,created_by)"
+                          " VALUES(?,?,?,'active','seed')", (pat, cat, note))
+            except sqlite3.IntegrityError:
+                pass
         existing.pop(pat, None)
     for gone in existing.values():           # md 里被删的，停用
         c.execute("UPDATE filter_rules SET status='removed' WHERE id=?", (gone["id"],))
@@ -122,9 +132,13 @@ def record_audit(session_id: str, line_no: int, cats: list, run_id: str = "colle
 
 
 def add_rule_from_candidate(pattern: str, category: str, note: str):
-    """批准后追加进 md（唯一真身）再同步。"""
+    """批准后追加进 md（唯一真身）再同步。空 pattern 直接拒绝（防静默空操作）。"""
+    pattern = (pattern or "").strip()
+    if not pattern:
+        return
     txt = config.FILTER_RULES_PATH.read_text("utf-8")
-    line = f"{pattern} ||| {category} ||| {note}\n"
+    safe_note = (note or "").replace("|||", "/").replace("\n", " ").replace("\r", " ")
+    line = f"{pattern} ||| {category} ||| {safe_note}\n"
     if pattern not in txt:
         if not txt.endswith("\n"):
             txt += "\n"

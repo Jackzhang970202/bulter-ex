@@ -39,8 +39,8 @@ ALL_DIRS = [RELEASES, FULL, INBOX, DISTILL, SANITIZED, RUNS, SAMPLES,
 DEFAULT_SETTINGS = {
     "port": 8420,
     "distill_max_input_chars": 240000,      # 单次蒸馏输入预算（≈60-80K token）
-    "digest_max_bytes": 6144,               # 发行版硬上限（防 compact 注入死循环；中文协议体约 5-6KB）
-    "active_rule_cap": 15,                  # 规则区容量（超限触发归档建议）
+    "digest_max_bytes": 20480,              # 发行版体积上限（用户拍板 20KB；1M 上下文模型）
+    "active_rule_cap": 200,                 # 规则数量警戒线（仅告警不硬拦；体积才是真闸）
     "reminder_hours": 24,                   # 距上次复盘 N 小时未做→角标提醒
     "poll_interval_sec": 3,
     "archive_keep_days": 180,

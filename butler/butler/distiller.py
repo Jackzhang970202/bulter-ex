@@ -12,6 +12,24 @@ from . import config, db, parser, repo, filterpipe, renderer
 _lock = threading.Lock()
 _proc: subprocess.Popen | None = None
 _thread: threading.Thread | None = None
+_cancel = threading.Event()             # 用户取消标志：短路回退重试与后续阶段
+_cur_run: int | None = None             # 当前 run 行 id：崩溃收尾也能落库
+
+
+def _kill_tree(p: subprocess.Popen):
+    """杀掉 shell=True 起的整棵进程树（否则 claude.exe 成孤儿继续烧钱）。"""
+    import os
+    try:
+        if os.name == "nt":
+            subprocess.run(["taskkill", "/PID", str(p.pid), "/T", "/F"],
+                           capture_output=True, timeout=10)
+        else:
+            p.kill()
+    except (OSError, subprocess.TimeoutExpired):
+        try:
+            p.kill()
+        except OSError:
+            pass
 
 PROMPT_TMPL = """你是"经验管家"的复盘蒸馏器。阅读【材料】（已脱敏的历史 AI 协作会话片段，每行以 [索引] 角色: 内容 开头），对照【当前规则库/画像库】，提炼值得沉淀的经验。
 
@@ -51,23 +69,29 @@ def start() -> tuple[bool, str]:
     with _lock:
         if is_running():
             return False, "already_running"
+        _cancel.clear()
         _thread = threading.Thread(target=_run_guarded, name="butler-distill", daemon=True)
         _thread.start()
         return True, "started"
 
 
 def cancel():
-    global _proc
-    if _proc and _proc.poll() is None:
-        try:
-            _proc.terminate()
-        except OSError:
-            pass
-    db.kv_set("distilling", "")
+    """置取消位并杀整棵进程树；distilling 旗标由 _run_guarded 的 finally 统一清除
+    （此处不清，避免"界面显示空闲但候选还在冒"的假象）。"""
+    _cancel.set()
+    p = _proc
+    if p and p.poll() is None:
+        _kill_tree(p)
+    if not is_running():
+        # 没有活线程收尾（陈旧旗标/恰好在两次运行之间）：就地清，防 UI 卡"取消中"
+        db.kv_set("distilling", "")
+        db.kv_set("distill_progress", "")
+        db.kv_set("distill_started_at", "")
     repo.event("distill_cancel")
 
 
 def _run_guarded():
+    global _cur_run
     db.kv_set("distilling", "1")
     db.kv_set("distill_started_at", db.now())
     db.kv_set("distill_progress", "准备中")
@@ -75,9 +99,13 @@ def _run_guarded():
         _run()
     except Exception as e:
         repo.log_error("distiller", f"crash:{type(e).__name__}", str(e))
-        _finish(status="error", note=str(e)[:200])
+        # 带上 run_id：更新已有 running 行为 error，而不是再造一条无主行
+        _finish(status="error", run_id=_cur_run, note=f"crash:{type(e).__name__}:{str(e)[:160]}")
     finally:
+        _cur_run = None
+        _cancel.clear()
         db.kv_set("distilling", "")
+        db.kv_set("distill_progress", "")
         _cleanup_old()
 
 
@@ -103,7 +131,7 @@ class Assembler:
         self.stopped = False
 
     def feed_session(self, sid, path, start_off, end_off, start_line, proj):
-        entries, _, _, _ = parser.read_increment(path, start_off, start_line)
+        entries, _, _, _, _ = parser.read_increment(path, start_off, start_line)
         entries = [e for e in entries if e.get("byte_off", 0) <= end_off]   # 钳制到快照终点
         sess_lines, consumed_bytes, consumed_lines = [], start_off, start_line - 1
         for e in entries:
@@ -143,9 +171,11 @@ def _run():
 
     # 1) 水位快照
     jobs = []
+    missing = 0
     for row in c.execute("SELECT * FROM sessions WHERE is_internal=0 AND "
                          "file_offset>consumed_offset ORDER BY project_path, session_id"):
         if repo.is_paused():
+            _finish(status="ok", note="采集暂停中，本轮未开始")
             return
         path = None
         for p in config.CLAUDE_PROJECTS.glob(f"*/{row['session_id']}.jsonl"):
@@ -155,9 +185,16 @@ def _run():
             a = config.ARCHIVE / row["slug"] / f"{row['session_id']}.jsonl"
             path = a if a.exists() else None
         if path is None:
+            # 源文件已被官方清理且未及归档 → 视为已消费，不再永久卡"未消化增量"
+            c.execute("UPDATE sessions SET consumed_offset=file_offset, "
+                      "consumed_lines=total_lines WHERE session_id=?", (row["session_id"],))
+            missing += 1
             continue
         jobs.append((row["session_id"], path, row["consumed_offset"], row["file_offset"],
                      row["consumed_lines"] + 1, row["project_path"] or row["slug"]))
+    if missing:
+        c.commit()
+        repo.event("distill_phase", detail={"stage": "missing_consumed", "sessions": missing})
     if not jobs:
         _finish(status="ok", note="无新内容（水位即最新）", candidates=0)
         return
@@ -192,13 +229,18 @@ def _run():
               .replace("{material}", asm.material))
 
     # 3) 无头执行（prompt 走 stdin，规避命令行长度限制）
+    global _cur_run
     run_id = c.execute("INSERT INTO distill_runs(started,status,input_chars)"
                        " VALUES(?,?,?)", (db.now(), "running", len(prompt))).lastrowid
+    _cur_run = run_id
     c.commit()
     config.RUNS.mkdir(parents=True, exist_ok=True)
     (config.RUNS / f"run{run_id}.prompt.txt").write_text(prompt, "utf-8")
     db.kv_set("distill_progress", f"材料 {len(asm.material)} 字符 · 调用 claude -p")
     out = _call_claude(prompt, str(config.RUNS))
+    if _cancel.is_set():
+        _finish(status="cancelled", run_id=run_id, note="用户取消（本轮不推进水位）")
+        return
     text = (out or {}).get("result") or ""
     usage = (out or {}).get("usage") or {}
     tokens = sum(v for v in usage.values() if isinstance(v, int))
@@ -207,14 +249,21 @@ def _run():
         _finish(status="error", run_id=run_id, note="claude -p 失败（errors 表可查）")
         return
 
-    # 4) 解析候选；失败重试一次（只要 JSON 块）
+    # 4) 解析候选；失败用同一材料重试一次并强化格式约束
+    #   （旧话术"请只重发上次输出"无效——claude -p 是无上下文新会话，根本看不到上次输出）
     data = _extract_json(text)
     if data is None:
-        out2 = _call_claude("上一次输出无法解析。请只重发最后一个 ```json 代码块，"
-                            "内容保持不变。", str(config.RUNS))
+        out2 = _call_claude(prompt + "\n\n【格式硬约束】不要任何解释文字。最后一个 "
+                            "```json 代码块内有且只有一个 JSON 对象"
+                            "（candidates 可以是空数组）。", str(config.RUNS))
+        if out2:
+            u2 = out2.get("usage") or {}
+            tokens += sum(v for v in u2.values() if isinstance(v, int))
+            if isinstance(out2.get("total_cost_usd"), (int, float)):
+                cost = (cost or 0) + out2["total_cost_usd"]
         data = _extract_json((out2 or {}).get("result", ""))
     if data is None:
-        _finish(status="error", run_id=run_id, tokens=tokens,
+        _finish(status="error", run_id=run_id, tokens=tokens, cost=cost,
                 note="输出两次不可解析；水位未推进")
         return
 
@@ -241,6 +290,7 @@ def _run():
             payload["mode"] = "forbid"
         if payload["kind_type"] not in ("fact", "pattern"):
             payload["kind_type"] = "fact"
+        payload["kind"] = payload["kind_type"]        # decide 晋升时读 kind，双键对齐
         dedup = cand.get("dedup", "new")
         if dedup not in ("new", "violation_repeat", "duplicate"):
             dedup = "new"
@@ -270,8 +320,8 @@ def _run():
                                        "rolled_chars": asm.rolled})
     try:
         renderer.ensure_current()
-    except Exception:
-        pass
+    except Exception as e:
+        repo.log_error("distiller", "ensure_render_failed", str(e))
 
 
 def stream_consume(lines, on_event):
@@ -293,8 +343,13 @@ def stream_consume(lines, on_event):
     return result
 
 
+class _Cancelled(Exception):
+    pass
+
+
 def _call_claude(prompt: str, cwd: str, timeout: int = 1800):
-    """优先 stream-json（实时心跳进度）；失败回退旧版纯 json。返回 {result,usage,...}。"""
+    """优先 stream-json（实时心跳进度）；仅当流模式【瞬间失败】才回退纯 json。
+    已经流出过内容再断（含用户取消）一律不重跑——回退重跑＝同一材料花两遍钱。"""
     global _proc
     bin_ = _claude_bin()
     if not bin_:
@@ -325,39 +380,55 @@ def _call_claude(prompt: str, cwd: str, timeout: int = 1800):
     # 第一遍：stream-json
     try:
         _proc = spawn("stream-json")
+        err_buf: list[str] = []
+
+        def _drain():     # stderr 持续排空：管道缓冲写满会吊死子进程（stream 模式从不读它）
+            try:
+                for ln in _proc.stderr:
+                    if len(err_buf) < 50:
+                        err_buf.append(ln)
+            except (OSError, ValueError):
+                pass
+
+        threading.Thread(target=_drain, daemon=True, name="butler-stderr").start()
         _proc.stdin.write(prompt)
         _proc.stdin.close()
         t0 = _t.time()
-        result = None
 
         def guarded():
             for line in _proc.stdout:
+                if _cancel.is_set():
+                    _kill_tree(_proc)
+                    raise _Cancelled()
                 if _t.time() - t0 > timeout:
                     raise subprocess.TimeoutExpired("", timeout)
                 yield line
 
         result = stream_consume(guarded(), on_ev)
         rc = _proc.wait(timeout=30)
-        err = (_proc.stderr.read() or "")[:200] if rc != 0 else ""
         _proc = None
         if result:
             return result
         if rc != 0:
-            repo.log_error("distiller", f"stream_exit_{rc}", err)
+            repo.log_error("distiller", f"stream_exit_{rc}", "".join(err_buf)[:200])
+        if stats["msgs"] > 0 or stats["chars"] > 0:
+            return None                     # 出过流却没走到 result：不重跑（防双花）
+    except _Cancelled:
+        _proc = None
+        return None
     except subprocess.TimeoutExpired:
-        try:
-            _proc.kill()
-        except OSError:
-            pass
+        if _proc:
+            _kill_tree(_proc)
         _proc = None
         repo.log_error("distiller", "timeout_1800s")
         return None
     except OSError as e:
         _proc = None
         repo.log_error("distiller", f"spawn:{e}")
-        return None
 
-    # 第二遍回退：旧版 json（stream 不可用/未出 result 且进程正常退出时）
+    # 第二遍回退：仅限 stream 模式瞬间失败，且用户未取消
+    if _cancel.is_set():
+        return None
     try:
         db.kv_set("distill_progress", "回退 json 模式重试")
         _proc = spawn("json")
@@ -370,6 +441,8 @@ def _call_claude(prompt: str, cwd: str, timeout: int = 1800):
         d = json.loads(out)
         return d if isinstance(d, dict) else None
     except (subprocess.TimeoutExpired, json.JSONDecodeError, OSError) as e:
+        if _proc and isinstance(e, subprocess.TimeoutExpired):
+            _kill_tree(_proc)
         _proc = None
         repo.log_error("distiller", f"fallback:{type(e).__name__}", str(e)[:200])
         return None

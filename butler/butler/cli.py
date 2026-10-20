@@ -42,6 +42,15 @@ def cmd_run(a):
     # 已修复缺陷的历史错误自动标记已处理（若复发会由 log_error 自动重新亮起）
     db.conn().execute("UPDATE errors SET resolved=1 WHERE resolved=0 AND kind IN "
                       "('file:IndexError','schema_drift')")
+    # 新进程里没有活的蒸馏线程：上次死亡残留的旗标一律清掉（防大屏按钮被陈旧
+    # "进行中"卡死），孤儿 running 行收尸
+    if db.kv_get("distilling") == "1":
+        db.kv_set("distilling", "")
+        db.kv_set("distill_progress", "")
+        db.kv_set("distill_started_at", "")
+    db.conn().execute("UPDATE distill_runs SET status='interrupted', "
+                      "finished=COALESCE(NULLIF(finished,''),?) "
+                      "WHERE status='running'", (db.now(),))
     db.conn().commit()
     renderer.render_all()
     from .collector import Collector

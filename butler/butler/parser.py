@@ -91,8 +91,11 @@ def parse_line(raw: str) -> Optional[dict]:
 
 def read_increment(path, offset: int, start_line: int = 1):
     """从字节偏移增量读取，只消费完整行（\n 结尾）。半行留到下次。
-    返回 (entries, new_offset, unknown_count, unknown_samples)。
-    entry 附带 line_no / byte_off（该行结尾），供证据回放与滚存截断。"""
+    返回 (entries, new_offset, unknown_count, unknown_samples, next_line)。
+    entry 附带 line_no / byte_off（该行结尾），供证据回放与滚存截断。
+    按 b"\\n" 物理切行（不用 str.splitlines：它会在 \\x0b/\\u2028 等 JSON 合法字符上
+    假切行，把一条记录切成两段造成假漂移）；next_line 为真实下一物理行号（含空行），
+    供调用方回写水位，杜绝空行造成的行号漂移。"""
     entries, unknown, samples = [], 0, []
     new_off = offset
     try:
@@ -100,15 +103,16 @@ def read_increment(path, offset: int, start_line: int = 1):
             f.seek(offset)
             chunk = f.read()
     except OSError:
-        return entries, offset, 0, []
+        return entries, offset, 0, [], start_line
     last_nl = chunk.rfind(b"\n")
     if last_nl == -1:
-        return entries, offset, 0, []               # 没有完整行
+        return entries, offset, 0, [], start_line  # 没有完整行
     complete = chunk[:last_nl + 1]
     new_off = offset + len(complete)
     pos = offset
-    for raw_line in complete.decode("utf-8", errors="replace").splitlines(keepends=True):
-        pos += len(raw_line.encode("utf-8", errors="replace"))   # CRLF 字节级兼容
+    for lb in complete.split(b"\n")[:-1]:          # 尾段必为空（complete 以 \n 结尾）
+        pos += len(lb) + 1
+        raw_line = lb.decode("utf-8", errors="replace")
         stripped = raw_line.strip()
         if not stripped:
             start_line += 1
@@ -124,7 +128,7 @@ def read_increment(path, offset: int, start_line: int = 1):
         d["byte_off"] = pos
         entries.append(d)
         start_line += 1
-    return entries, new_off, unknown, samples
+    return entries, new_off, unknown, samples, start_line
 
 
 def total_usage_bytes(path) -> int:

@@ -69,20 +69,41 @@ class T02_P1_parser(unittest.TestCase):
         content = (H.user_msg("u1", "第一行") + "\r\n" + H.asst_msg("a1", "第二行")
                    + "\n" + H.user_msg("u9", "半行未写完"))   # 无换行结尾
         p.write_bytes(content.encode("utf-8"))
-        e, off, unk, _ = parser.read_increment(p, 0, 1)
+        e, off, unk, _, nxt = parser.read_increment(p, 0, 1)
         self.assertEqual(len(e), 2)
-        e2, off2, _, _ = parser.read_increment(p, off, 3)
-        self.assertEqual((len(e2), off2), (0, off))           # 半行不消费
+        self.assertEqual(nxt, 3)                             # 下一物理行号
+        e2, off2, _, _, nxt2 = parser.read_increment(p, off, 3)
+        self.assertEqual((len(e2), off2), (0, off))          # 半行不消费
         p.write_bytes((content + "\n").encode("utf-8"))      # 补完
-        e3, off3, _, _ = parser.read_increment(p, off, 3)
+        e3, off3, _, _, _ = parser.read_increment(p, off, 3)
         self.assertEqual(len(e3), 1)
         self.assertEqual(e3[0]["line_no"], 3)                # 行号连续
         self.assertEqual(e[1]["line_no"], 2)                 # CRLF 行号正确
 
+    def test_blank_lines_counted_in_line_numbers(self):
+        # 空行计入物理行号（next_line 透出），证据回放不再错位
+        p = self.tmp / "s3.jsonl"
+        p.write_text(H.user_msg("u1", "第一条") + "\n\n\n" + H.asst_msg("a1", "第二条")
+                     + "\n", "utf-8")
+        e, off, unk, _, nxt = parser.read_increment(p, 0, 1)
+        self.assertEqual([d["line_no"] for d in e], [1, 4])
+        self.assertEqual(nxt, 5)
+
+    def test_u2028_does_not_split_line(self):
+        #  在 JSON 字符串值里合法：不得被当成行界（假漂移防线）
+        p = self.tmp / "s4.jsonl"
+        msg = json.dumps({"type": "user", "uuid": "u1", "timestamp": "x",
+                          "message": {"role": "user", "content":
+                                      [{"type": "text", "text": "前 后"}]}},
+                         ensure_ascii=False)
+        p.write_bytes((msg + "\n").encode("utf-8"))
+        e, off, unk, _, _ = parser.read_increment(p, 0, 1)
+        self.assertEqual((unk, len(e)), (0, 1))
+
     def test_unknown_tolerated(self):
         p = self.tmp / "s2.jsonl"
         p.write_text('{"totally":"unknown"}\n' + H.user_msg("u1", "ok") + "\n", "utf-8")
-        e, off, unk, samples = parser.read_increment(p, 0, 1)
+        e, off, unk, samples, _ = parser.read_increment(p, 0, 1)
         self.assertEqual((unk, len(e)), (1, 1))
         self.assertTrue(samples)
 
@@ -407,13 +428,152 @@ class T08_Stream_Evidence(unittest.TestCase):
         sid = "abc123"
         (slug / f"{sid}.jsonl").write_text(
             H.user_msg("u1", "短证据行") + "\n"
-            + H.user_msg("u2", "长原文" + "A" * 3000) + "\n", "utf-8")
+            + H.user_msg("u2", "长原文" + "A" * 6000) + "\n", "utf-8")
         q_short = repo.evidence_quotes([{"session": sid, "line": 1, "quote": "快照"}])[0]
         self.assertEqual(q_short["quote"], "短证据行")
         self.assertTrue(q_short["full"])
         q_long = repo.evidence_quotes([{"session": sid, "line": 2, "quote": "快照"}])[0]
-        self.assertIn("长原文", q_long["quote"])          # 读到文件全文（截1600）
+        self.assertIn("长原文", q_long["quote"])          # 读到文件全文（截4000）
         self.assertFalse(q_long["full"])
+
+    def test_evidence_fast_path_via_slug(self):
+        # sessions 有 slug 登记时走 O(1) 定位（不依赖 rglob 全库扫）
+        sid = "fast123"
+        slug_dir = config.CLAUDE_PROJECTS / "D--y"
+        slug_dir.mkdir(parents=True)
+        (slug_dir / f"{sid}.jsonl").write_text(
+            H.user_msg("u1", "废话") + "\n" + H.user_msg("u2", "目标句") + "\n", "utf-8")
+        db.conn().execute("INSERT INTO sessions(session_id,slug,total_lines) "
+                          "VALUES(?,?,2)", (sid, "D--y"))
+        db.conn().commit()
+        q = repo.evidence_quotes([{"session": sid, "line": 2, "quote": "旧快照"}])[0]
+        self.assertEqual(q["quote"], "目标句")
+        self.assertTrue(q["full"])
+
+
+class T09_Decide_Edited_Safety(unittest.TestCase):
+    """"改后批准"各 kind 的数据安全：不得悄悄翻转 mode、清空旧例、丢编辑值、写占位符。"""
+
+    def setUp(self):
+        H.setup_home()
+
+    def test_rewrite_keeps_mode_and_untouched_fields(self):
+        cid = repo.add_candidate("rule", {"mode": "require", "statement": "旧条文",
+                                          "ex_bad": "旧错", "ex_good": "旧对"})
+        repo.decide_candidate(cid, "approve")                      # T1 require
+        c2 = repo.add_candidate("rule", {"mode": "require", "statement": "旧条文",
+                                         "ex_bad": "旧错", "ex_good": "旧对"},
+                                dedup="violation_repeat", dedup_ref="T1")
+        # 模拟旧版前端只传 statement：mode/正反例必须沿用旧值，不许被翻转清空
+        self.assertTrue(repo.decide_candidate(c2, "approve",
+                                              edited={"statement": "新条文"}))
+        r = db.conn().execute("SELECT * FROM rules WHERE id='T1'").fetchone()
+        self.assertEqual(r["mode"], "require")
+        self.assertEqual(r["statement"], "新条文")
+        self.assertEqual(r["ex_bad"], "旧错")
+        self.assertEqual(r["ex_good"], "旧对")
+
+    def test_rewrite_empty_statement_or_ghost_ref_refused(self):
+        cid = repo.add_candidate("rule", {"mode": "forbid", "statement": "旧条文",
+                                          "ex_bad": "a", "ex_good": "b"})
+        repo.decide_candidate(cid, "approve")
+        c2 = repo.add_candidate("rule", {"statement": "x"}, dedup="violation_repeat",
+                                dedup_ref="T1")
+        self.assertFalse(repo.decide_candidate(c2, "approve", edited={"statement": "  "}))
+        self.assertEqual(db.conn().execute(
+            "SELECT statement FROM rules WHERE id='T1'").fetchone()["statement"], "旧条文")
+        self.assertEqual(db.conn().execute(
+            "SELECT status FROM candidates WHERE id=?", (c2,)).fetchone()["status"], "pending")
+        c3 = repo.add_candidate("rule", {"statement": "y"}, dedup="violation_repeat",
+                                dedup_ref="T99")                    # ref 幻觉
+        self.assertFalse(repo.decide_candidate(c3, "approve"))
+
+    def test_filter_edit_pattern_applied_and_guards(self):
+        cid = repo.add_candidate("filter", {"pattern": "OLD_[A-Z]{4}", "category": "secret"})
+        # 编辑后的 pattern 必须真正入库（旧实现只读原始 pattern，编辑被静默丢弃）
+        self.assertTrue(repo.decide_candidate(cid, "approve",
+                                              edited={"pattern": "NEW_[A-Z]{4}",
+                                                      "category": "pii"}))
+        md = config.FILTER_RULES_PATH.read_text("utf-8")
+        self.assertIn("NEW_[A-Z]{4}", md)
+        filterpipe._compiled = None
+        masked, cats = filterpipe.mask_text("前 NEW_ABCD 后")
+        self.assertIn("pii", cats)
+        # 空/坏 pattern 拒绝晋升
+        c2 = repo.add_candidate("filter", {"pattern": "X" * 12})
+        self.assertFalse(repo.decide_candidate(c2, "approve", edited={"pattern": ""}))
+        c3 = repo.add_candidate("filter", {"pattern": "Y" * 12})
+        self.assertFalse(repo.decide_candidate(c3, "approve", edited={"pattern": "([bad"}))
+
+    def test_profile_kind_type_promotes(self):
+        cid = repo.add_candidate("profile", {"statement": "周三上午写方案",
+                                             "kind_type": "pattern"})
+        repo.decide_candidate(cid, "approve")
+        p = db.conn().execute("SELECT kind FROM profiles").fetchone()
+        self.assertEqual(p["kind"], "pattern")                     # 不再被降级成 fact
+
+    def test_reject_does_not_bump_digest_version(self):
+        cid = repo.add_candidate("rule", {"mode": "forbid", "statement": "s",
+                                          "ex_bad": "a", "ex_good": "b"})
+        before = db.conn().execute("SELECT COUNT(*) n FROM digest_versions").fetchone()["n"]
+        repo.decide_candidate(cid, "reject")
+        after = db.conn().execute("SELECT COUNT(*) n FROM digest_versions").fetchone()["n"]
+        self.assertEqual(before, after)
+
+
+class T10_Collector_Edge(unittest.TestCase):
+    def setUp(self):
+        self.tmp = H.setup_home()
+
+    def test_multi_block_note_ingest_keeps_all_blocks(self):
+        # 一份 note 两个候选块：旧实现条件写反，第一块被后块覆盖静默丢失
+        (config.INBOX / "note-m1.md").write_text(
+            "kind: rule\nstatement: 第一条\ndedup: new\n"
+            "kind: rule\nstatement: 第二条\ndedup: new\n", "utf-8")   # 块间无空行（旧代码丢第一块）
+        from butler.collector import Collector
+        Collector().sweep_inbox()
+        cs = repo.candidates_list(True)
+        self.assertEqual(len(cs), 2)
+        self.assertEqual({c["payload"]["statement"] for c in cs}, {"第一条", "第二条"})
+
+    def test_duplicate_filter_md_line_survives_sync(self):
+        # md 手贴重复行：同步不炸 IntegrityError（`butler run` 起不来防线）
+        txt = config.FILTER_RULES_PATH.read_text("utf-8")
+        config.FILTER_RULES_PATH.write_text(txt + txt.splitlines()[1] + "\n", "utf-8")
+        filterpipe.sync_md_to_db()                                 # 不抛异常
+        self.assertTrue(db.conn().execute(
+            "SELECT 1 FROM filter_rules LIMIT 1").fetchone())
+
+    def test_removed_then_readded_pattern_revives(self):
+        base = config.FILTER_RULES_PATH.read_text("utf-8")
+        config.FILTER_RULES_PATH.write_text(base + "ZZTEST_[0-9]{4} ||| pii ||| t\n",
+                                            "utf-8")
+        filterpipe.sync_md_to_db()
+        config.FILTER_RULES_PATH.write_text(base, "utf-8")          # 删掉
+        filterpipe.sync_md_to_db()
+        row = db.conn().execute("SELECT status FROM filter_rules WHERE "
+                                "pattern='ZZTEST_[0-9]{4}'").fetchone()
+        self.assertEqual(row["status"], "removed")
+        config.FILTER_RULES_PATH.write_text(base + "ZZTEST_[0-9]{4} ||| pii ||| t\n",
+                                            "utf-8")
+        filterpipe.sync_md_to_db()                                  # 加回
+        row = db.conn().execute("SELECT status FROM filter_rules WHERE "
+                                "pattern='ZZTEST_[0-9]{4}'").fetchone()
+        self.assertEqual(row["status"], "active")                   # 复活
+
+    def test_collector_line_bookkeeping_with_blank_lines(self):
+        slug = config.CLAUDE_PROJECTS / "D--bl"
+        slug.mkdir()
+        sp = slug / "bl-1.jsonl"
+        sp.write_text(H.user_msg("u1", "一") + "\n\n" + H.asst_msg("a1", "二")
+                      + "\n", "utf-8")
+        from butler.collector import Collector
+        Collector().sweep_once()
+        row = db.conn().execute("SELECT * FROM sessions WHERE session_id='bl-1'").fetchone()
+        self.assertEqual(row["total_lines"], 3)                     # 物理行数（含空行）
+        # 蒸馏证据行号 = 物理行号，证据回放按同一口径读得到正确行
+        q = repo.evidence_quotes([{"session": "bl-1", "line": 3, "quote": "快照"}])[0]
+        self.assertEqual(q["quote"], "二")
 
 
 if __name__ == "__main__":

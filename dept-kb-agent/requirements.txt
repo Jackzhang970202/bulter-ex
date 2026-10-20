@@ -1,0 +1,25 @@
+# dept-kb-agent 运行依赖（Python 3.10+）
+# 核心
+fastapi
+uvicorn
+python-multipart
+litellm>=1.97
+openai>=1.70
+openai-agents>=0.18.1
+# PageIndex 索引
+pypdfium2>=5
+PyPDF2>=3.0.0
+sortedcontainers
+regex
+python-dotenv
+pyyaml
+Pillow
+requests
+urllib3
+# 文档解析
+python-docx
+python-pptx
+openpyxl
+# 录音转写（可选，缺失时录音管线会提示）
+faster-whisper
+imageio-ffmpeg

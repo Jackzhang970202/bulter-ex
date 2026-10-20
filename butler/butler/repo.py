@@ -202,11 +202,22 @@ def decide_candidate(cid: int, action: str, edited: dict | None = None, note: st
     if action == "approve":
         if kind == "rule":
             if dedup == "violation_repeat" and ref:
-                st = payload.get("statement") or "（沿用）"
+                old = c.execute("SELECT * FROM rules WHERE id=?", (ref,)).fetchone()
+                if old is None:
+                    return False            # ref 幻觉（不存在的规则号）：拒绝晋升而非静默蒸发
+                st = (payload.get("statement") or "").strip()
+                if not st:
+                    return False            # 空陈述不写占位符，绝不销毁旧条文
+
+                def _keep(key, fallback):   # 未提供/空串 → 保留旧值（防"改后批准"清空正反例）
+                    v = payload.get(key)
+                    v = v.strip() if isinstance(v, str) else v
+                    return v if v else fallback
                 c.execute("UPDATE rules SET statement=?, ex_bad=?, ex_good=?, mode=?,"
                           " note=? WHERE id=?",
-                          (st, payload.get("ex_bad", ""), payload.get("ex_good", ""),
-                           payload.get("mode", "forbid"),
+                          (st, _keep("ex_bad", old["ex_bad"]),
+                           _keep("ex_good", old["ex_good"]),
+                           payload.get("mode") or old["mode"],
                            f"经复盘改写@{db.now()}", ref))
             else:
                 if not payload.get("statement"):
@@ -219,15 +230,26 @@ def decide_candidate(cid: int, action: str, edited: dict | None = None, note: st
         elif kind == "profile":
             if not payload.get("statement"):
                 return False
+            pkind = payload.get("kind") or payload.get("kind_type") or "fact"
+            if pkind not in ("fact", "pattern"):
+                pkind = "fact"
             pid = _next_profile_id()
             c.execute("INSERT INTO profiles(id,subject,kind,statement,status,first_seen,"
                       "ttl_days) VALUES(?,?,?,?, 'active', ?,?)",
                       (pid, payload.get("subject", ""),
-                       payload.get("kind", "fact"), payload["statement"],
+                       pkind, payload["statement"],
                        db.now(), int(payload.get("ttl_days", 90))))
         elif kind == "filter":
+            import re as _re
+            pat = (payload.get("pattern") or "").strip()
+            if not pat:
+                return False                # 空 pattern 批准=静默空操作，直接拒绝
+            try:
+                _re.compile(pat)
+            except _re.error:
+                return False
             filterpipe.add_rule_from_candidate(
-                payload.get("pattern", ""), payload.get("category", "secret"),
+                pat, (payload.get("category") or "secret").strip(),
                 payload.get("note", "复盘提议"))
         c.execute("UPDATE candidates SET status='approved', decided_at=?, decision_note=?"
                   " WHERE id=?", (db.now(), note, cid))
@@ -282,6 +304,12 @@ def passive_expire():
         c.commit()
         event("archive_passive", detail={"profiles_expired": n})
         invalidate_render()
+        # 过期即影响注入内容：就地重渲，不留"待重渲"挂账（失败下轮采集还会兜底）
+        try:
+            from . import renderer
+            renderer.render_all()
+        except Exception as e:
+            log_error("repo", "passive_render_failed", str(e))
     return n
 
 
@@ -404,33 +432,67 @@ def inject_stats_24h():
 
 
 # ---------- 证据回放（优先读原文完整行；出口必须再过一遍过滤） ----------
+_EV_LIMIT = 4000
+
+
+def _find_session_file(sid: str):
+    """优先 sessions.slug O(1) 定位；查不到再全库 rglob 兜底（旧数据/缺登记）。"""
+    srow = db.conn().execute("SELECT slug FROM sessions WHERE session_id=?",
+                             (sid,)).fetchone()
+    slug = (srow["slug"] or "") if srow else ""
+    if slug:
+        for base in (config.ARCHIVE, config.CLAUDE_PROJECTS):
+            p = base / slug / f"{sid}.jsonl"
+            if p.exists():
+                return p
+    for base in (config.ARCHIVE, config.CLAUDE_PROJECTS):
+        try:
+            for p in base.rglob(f"{sid}.jsonl"):
+                return p
+        except OSError:
+            continue
+    return None
+
+
 def evidence_quotes(evidence: list):
     out = []
     for ev in evidence or []:
         sid, line = ev.get("session", ""), int(ev.get("line", 0) or 0)
         text, from_file = ev.get("quote", ""), False
         if sid and line:
-            for base in (config.ARCHIVE, config.CLAUDE_PROJECTS):
-                if from_file:
-                    break
-                for p in base.rglob(f"{sid}.jsonl"):
-                    try:
-                        with open(p, "r", encoding="utf-8", errors="replace") as f:
-                            for i, raw in enumerate(f, 1):
-                                if i == line:
-                                    d = _parser.parse_line(raw)
-                                    t = (d or {}).get("text", "")
-                                    if t:
-                                        text, from_file = t, True
-                                    break
-                    except OSError:
-                        continue
-                    if from_file:
-                        break
-        masked, _ = filterpipe.mask_text(text[:1600])
+            p = _find_session_file(sid)
+            if p:
+                try:
+                    with open(p, "r", encoding="utf-8", errors="replace") as f:
+                        for i, raw in enumerate(f, 1):
+                            if i == line:
+                                d = _parser.parse_line(raw)
+                                t = (d or {}).get("text", "")
+                                if t:
+                                    text, from_file = t, True
+                                break
+                except OSError:
+                    pass
+        masked, _ = filterpipe.mask_text(text[:_EV_LIMIT])
         out.append({"session": sid, "line": line, "ts": ev.get("ts", ""),
-                    "quote": masked, "full": from_file and len(text) <= 1600})
+                    "quote": masked, "full": from_file and len(text) <= _EV_LIMIT,
+                    "src": "file" if from_file else "snapshot",
+                    "trunc": from_file and len(text) > _EV_LIMIT})
     return out
+
+
+def _events(limit: int):
+    """事件流：detail 反序列化成对象再出门，前端不再裸显 JSON 字符串。"""
+    rows = []
+    for r in db.conn().execute(
+            "SELECT * FROM events ORDER BY id DESC LIMIT ?", (limit,)):
+        d = dict(r)
+        try:
+            d["detail"] = json.loads(d.get("detail") or "{}")
+        except (json.JSONDecodeError, TypeError):
+            d["detail"] = {"raw": d.get("detail") or ""}
+        rows.append(d)
+    return rows
 
 
 # ---------- 大屏聚合 ----------
@@ -472,13 +534,15 @@ def stats():
         distill_started_at=db.kv_get("distill_started_at"),
         errors=[dict(r) for r in c.execute(
             "SELECT * FROM errors WHERE resolved=0 ORDER BY last_at DESC LIMIT 8")],
-        events=[dict(r) for r in c.execute(
-            "SELECT * FROM events ORDER BY id DESC LIMIT 30")],
+        events=_events(30),
         candidates=candidates_list(True),
+        # 自然序（T1,T2,…T10）：字典序会把 T10 排在 T2 前，注入顺序也乱
         rules=[dict(r) for r in c.execute(
-            "SELECT * FROM rules WHERE status<>'archived' ORDER BY id")],
+            "SELECT * FROM rules WHERE status<>'archived' "
+            "ORDER BY CAST(substr(id,2) AS INTEGER)")],
         archived_rules=[dict(r) for r in c.execute(
-            "SELECT * FROM rules WHERE status='archived' ORDER BY id DESC LIMIT 50")],
+            "SELECT * FROM rules WHERE status='archived' "
+            "ORDER BY CAST(substr(id,2) AS INTEGER) DESC LIMIT 50")],
         expired_profiles=[dict(r) for r in c.execute(
             "SELECT * FROM profiles WHERE status='expired' ORDER BY id DESC LIMIT 50")],
         active_rule_count=c.execute(
@@ -490,7 +554,7 @@ def stats():
             "by_category": {r["category"]: r["t"] for r in c.execute(
                 "SELECT category, SUM(hits_total) t FROM filter_rules GROUP BY category")}},
         distills=[dict(r) for r in c.execute(
-            "SELECT * FROM distill_runs ORDER BY id DESC LIMIT 10")],
+            "SELECT * FROM distill_runs ORDER BY id DESC LIMIT 50")],
         pending_connects=pending_projects(),
         connected=connected_projects(),
         usage_7d=[dict(r) for r in c.execute(

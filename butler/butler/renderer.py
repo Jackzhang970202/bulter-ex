@@ -62,18 +62,18 @@ def render_all(force=False) -> dict:
 
     connected = st["connected"]
     results = []
+    over_limit = []
     for prj in connected:
         overlay = (prj.get("overlay_text") or "").strip()
         body = central + ("\n\n## 本项目侧重\n" + overlay if overlay else "")
         if len(body.encode("utf-8")) > size_guard:
-            db.conn().execute("INSERT OR REPLACE INTO digest_versions"
-                              "(ver,rendered_at,bytes,est_tokens,rule_ids,nonce,stale)"
-                              " VALUES(?,?,?,?,?,?,1)",
-                              (ver + 1, db.now(), len(body.encode("utf-8")),
-                               len(body) // 3, "", nonce))
-            db.conn().commit()
-            repo.log_error("renderer", "digest_over_limit")
-            continue  # 拒渲，保留旧版（宁可不更新，不可撑爆注入）
+            # 拒渲该项目、保留其旧版文件（宁可不更新，不可撑爆注入）。
+            # 不再往 digest_versions 写同版本号的 stale 行——它随后必被中央行
+            # INSERT OR REPLACE 覆盖（假记录），可见性由 errors:digest_over_limit 承担。
+            over_limit.append(prj["path"])
+            repo.log_error("renderer", "digest_over_limit",
+                           f"{prj['path']} 发行版 {len(body.encode('utf-8'))}B 超上限")
+            continue
         h = config.project_hash(prj["path"])
         (config.RELEASES / f"{h}.md").write_text(body, "utf-8")
         results.append(h)
@@ -89,8 +89,13 @@ def render_all(force=False) -> dict:
     c.commit()
     db.kv_set("digest_dirty", "")
     db.kv_set("digest_nonce", nonce)
-    repo.event("render", detail={"ver": ver + 1, "projects": results})
-    return {"ver": ver + 1, "stale": False, "projects": results, "bytes": len(central.encode())}
+    if len(central.encode("utf-8")) > size_guard:      # 无接入项目时也要可见（红线：注入体积）
+        repo.log_error("renderer", "central_over_limit",
+                       f"中央版 {len(central.encode('utf-8'))}B 超上限，请精简规则或归档")
+    repo.event("render", detail={"ver": ver + 1, "projects": results,
+                                 **({"over_limit": len(over_limit)} if over_limit else {})})
+    return {"ver": ver + 1, "stale": bool(over_limit), "over_limit": over_limit,
+            "projects": results, "bytes": len(central.encode())}
 
 
 def ensure_current():

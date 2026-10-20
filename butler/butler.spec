@@ -2,7 +2,7 @@
 from PyInstaller.utils.hooks import collect_submodules
 from PyInstaller.utils.hooks import collect_all
 
-datas = [('D:/ccworkcreat/ai教程/butler/butler/web', 'web')]
+datas = [('D:/ccode/bulter-ex/butler/butler/web', 'web')]
 binaries = [('D:/conda/envs/agent-framework/Library/bin/libssl-3-x64.dll', '.'), ('D:/conda/envs/agent-framework/Library/bin/libcrypto-3-x64.dll', '.')]
 hiddenimports = []
 hiddenimports += collect_submodules('uvicorn')
@@ -11,7 +11,7 @@ datas += tmp_ret[0]; binaries += tmp_ret[1]; hiddenimports += tmp_ret[2]
 
 
 a = Analysis(
-    ['D:/ccworkcreat/ai教程/butler/butler_build.py'],
+    ['D:/ccode/bulter-ex/butler/butler_build.py'],
     pathex=[],
     binaries=binaries,
     datas=datas,

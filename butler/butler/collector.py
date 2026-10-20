@@ -79,7 +79,8 @@ class Collector(threading.Thread):
         if srow["is_internal"]:
             return
         offset, start_line = srow["file_offset"], srow["total_lines"] + 1
-        entries, new_off, unknown, samples = parser.read_increment(path, offset, start_line)
+        entries, new_off, unknown, samples, next_line = \
+            parser.read_increment(path, offset, start_line)
         if not srow["project_path"]:
             for e in entries:
                 if e.get("cwd"):
@@ -124,10 +125,10 @@ class Collector(threading.Thread):
                 self.save_drift_samples(path, samples)
             self.drift_unknown = self.drift_total = 0
         c = db.conn()
-        c.execute("UPDATE sessions SET file_offset=?, total_lines=total_lines+?, "
+        # total_lines 用 next_line 绝对回写：空行/坏行同样计行号，杜绝证据回放行号漂移
+        c.execute("UPDATE sessions SET file_offset=?, total_lines=?, "
                   "parse_errors=parse_errors+?, last_event_at=? WHERE session_id=?",
-                  (new_off, len(entries) + unknown, unknown,
-                   db.now(), sid))
+                  (new_off, next_line - 1, unknown, db.now(), sid))
         c.commit()
         self.maybe_archive(path, slug, sid, srow)
 
@@ -180,7 +181,7 @@ class Collector(threading.Thread):
             m = parser_kv(ln)
             if m:
                 k, v = m
-                if k == "kind" and v in cur:      # 新块开始（kind 重复出现）
+                if k == "kind" and "kind" in cur:  # 新块开始（kind 重复出现）
                     blocks.append(cur); cur = {}
                 cur[k] = v
         if cur:
