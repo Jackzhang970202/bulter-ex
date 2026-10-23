@@ -1,6 +1,0 @@
-__pycache__/
-*.pyc
-data/
-!data/.gitkeep
-_probe/
-*.log

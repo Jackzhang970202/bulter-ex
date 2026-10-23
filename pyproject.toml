@@ -1,0 +1,53 @@
+[build-system]
+requires = ["setuptools>=68"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "knowlens"
+version = "0.1.0"
+description = "KnowLens — department knowledge Q&A and experience-evolution agent"
+readme = "README.md"
+license = { text = "MIT" }
+requires-python = ">=3.10"
+authors = [{ name = "KnowLens Contributors" }]
+keywords = ["knowledge-base", "rag", "pageindex", "department", "self-evolving"]
+classifiers = [
+  "Development Status :: 3 - Alpha",
+  "License :: OSI Approved :: MIT License",
+  "Programming Language :: Python :: 3.10",
+  "Programming Language :: Python :: 3.11",
+  "Programming Language :: Python :: 3.12",
+  "Operating System :: OS Independent",
+]
+dependencies = [
+  "fastapi>=0.115,<1",
+  "uvicorn>=0.30",
+  "python-multipart>=0.0.9",
+  "litellm>=1.97",
+  "openai>=1.70",
+  "openai-agents>=0.18.1",
+  "pypdfium2>=5",
+  "PyPDF2>=3.0.0",
+  "pdfplumber>=0.11",
+  "sortedcontainers>=2.4",
+  "regex>=2024.0.0",
+  "python-dotenv>=1.0",
+  "pyyaml>=6.0",
+  "Pillow>=9.0",
+  "requests>=2.28",
+  "python-docx>=1.1",
+  "python-pptx>=0.6",
+  "openpyxl>=3.1",
+]
+
+[project.urls]
+Homepage = "https://github.com/your-org/knowlens"
+Issues = "https://github.com/your-org/knowlens/issues"
+
+[tool.setuptools]
+packages = ["knowlens"]
+
+[tool.ruff]
+line-length = 100
+target-version = "py310"
+exclude = ["vendor", "web/vendor", "_probe", "data"]

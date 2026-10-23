@@ -1,0 +1,106 @@
+<!DOCTYPE html>
+<html lang="zh-CN" data-theme="light">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>知鉴 KnowLens · 部门知识智能体</title>
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'%3E%3Crect width='32' height='32' rx='8' fill='%232f7df6'/%3E%3Ctext x='16' y='22' font-size='16' text-anchor='middle' fill='white' font-family='sans-serif'%3E%E9%89%B4%3C/text%3E%3C/svg%3E">
+<link rel="stylesheet" href="/static/style.css">
+<link rel="stylesheet" href="/static/style_v2.css">
+<link rel="stylesheet" href="/static/theme.css">
+</head>
+<body>
+  <aside id="sidebar">
+    <div class="logo">
+      <div class="mark">鉴</div>
+      <div><b>知鉴 KnowLens</b><small>有出处的回答，会进化的知识</small></div>
+    </div>
+    <select class="space-pick" id="space-select" title="空间（知识隔离边界）"></select>
+    <button class="btn primary w100" id="btn-new-chat">✚ 新对话</button>
+    <button class="btn w100" id="btn-new-space" style="margin-top:6px">＋ 新建空间</button>
+    <nav id="nav">
+      <button class="nav-item" data-view="dashboard">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>驾驶舱</button>
+      <button class="nav-item" data-view="kb">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5V5.5Z"/><path d="M4 5.5v15M8 7h8M8 10.5h6"/></svg></span>知识空间</button>
+      <button class="nav-item" data-view="chat">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.6 9.6 0 0 1-3.5-.7L3 21l1.8-4.6A8.4 8.4 0 1 1 21 11.5Z"/><path d="M8.5 10.5h7M8.5 14h4.5"/></svg></span>智能问答</button>
+      <button class="nav-item" data-view="evolve">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/><circle cx="12" cy="12" r="3.2"/></svg></span>经验中心</button>
+      <button class="nav-item" data-view="settings">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="3"/><path d="M19.4 15a1.7 1.7 0 0 0 .3 1.9l.1.1a2 2 0 1 1-2.8 2.8l-.1-.1a1.7 1.7 0 0 0-1.9-.3 1.7 1.7 0 0 0-1 1.5V21a2 2 0 1 1-4 0v-.1a1.7 1.7 0 0 0-1-1.5 1.7 1.7 0 0 0-1.9.3l-.1.1a2 2 0 1 1-2.8-2.8l.1-.1a1.7 1.7 0 0 0 .3-1.9 1.7 1.7 0 0 0-1.5-1H3a2 2 0 1 1 0-4h.1a1.7 1.7 0 0 0 1.5-1 1.7 1.7 0 0 0-.3-1.9l-.1-.1a2 2 0 1 1 2.8-2.8l.1.1a1.7 1.7 0 0 0 1.9.3H9a1.7 1.7 0 0 0 1-1.5V3a2 2 0 1 1 4 0v.1a1.7 1.7 0 0 0 1 1.5 1.7 1.7 0 0 0 1.9-.3l.1-.1a2 2 0 1 1 2.8 2.8l-.1.1a1.7 1.7 0 0 0-.3 1.9V9a1.7 1.7 0 0 0 1.5 1H21a2 2 0 1 1 0 4h-.1a1.7 1.7 0 0 0-1.5 1Z"/></svg></span>设置</button>
+    </nav>
+    <div class="side-sec">最近会话</div>
+    <div class="hist-list" id="hist-list"></div>
+    <div class="side-foot">
+      <span class="dot" id="model-dot"></span>
+      <span id="model-info">检测模型通道…</span>
+      <span style="flex:1"></span>
+      <span id="app-version">v0.1.0</span>
+    </div>
+  </aside>
+
+  <div id="main">
+    <div class="topbar">
+      <div class="tb-title">
+        <h2 id="view-title">驾驶舱</h2>
+        <small id="view-sub">空间总览与知识健康</small>
+      </div>
+      <div class="spacer" style="flex:1"></div>
+      <div id="topbar-actions"></div>
+      <div class="tb-status"><span class="dot" id="space-dot"></span><span id="space-status">数据就绪</span></div>
+      <div class="clock" id="clock">--:--:--<small>加载中</small></div>
+      <button class="btn ghost sm" id="btn-refresh" title="刷新当前页">⟳</button>
+      <button class="btn ghost sm" id="btn-theme" title="切换深浅色">◐</button>
+    </div>
+    <div class="view" id="view"></div>
+  </div>
+
+  <!-- 文档详情抽屉 -->
+  <div class="drawer-mask" id="drawer-mask"></div>
+  <aside class="drawer" id="doc-drawer">
+    <header class="dw-head">
+      <span class="dw-ic" id="dw-icon">📄</span>
+      <div class="dw-title"><b id="dw-name"></b><small id="dw-lib"></small></div>
+      <button class="btn ghost sm" id="dw-download" title="下载原件">⬇</button>
+      <button class="btn ghost sm" id="dw-close">✕</button>
+    </header>
+    <div class="dw-body" id="dw-body"></div>
+    <div class="dw-resizer" id="dw-resizer" title="拖动调整宽度"></div>
+  </aside>
+
+  <!-- 库详情：迷你问答 -->
+  <button class="kb-fab" id="kb-fab" title="直接问答这个库">💬</button>
+  <div class="mini-chat" id="mini-chat">
+    <header class="mc-head">
+      <span style="flex:1">💬 问答 · <b id="mc-lib"></b></span>
+      <button class="btn ghost sm" id="mc-new" title="新对话">✚</button>
+      <button class="btn ghost sm" id="mc-close">✕</button>
+    </header>
+    <div class="mc-msgs" id="mc-msgs"></div>
+    <div class="mc-input">
+      <textarea id="mc-q" rows="1" placeholder="针对本库提问，Enter 发送，Shift+Enter 换行"></textarea>
+      <button class="send-round" id="mc-send" title="发送">
+        <svg width="14" height="14" viewBox="0 0 24 24" fill="none">
+          <path d="M4 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+      </button>
+    </div>
+  </div>
+
+  <div id="drop-mask"><div>松开鼠标：上传文件或整个文件夹到当前库（自动递归子目录）</div></div>
+  <div id="toast-box"></div>
+
+  <div class="modal-back" id="modal-back">
+    <div class="modal">
+      <div class="mh"><span id="modal-title"></span><span class="spacer"></span>
+        <button class="btn ghost sm" onclick="closeModal()">✕</button></div>
+      <div class="mb" id="modal-body"></div>
+      <div class="mf" id="modal-foot"></div>
+    </div>
+  </div>
+
+  <script src="/static/vendor/marked.min.js"></script>
+  <script src="/static/vendor/echarts.min.js"></script>
+  <script src="/static/app.js"></script>
+</body>
+</html>

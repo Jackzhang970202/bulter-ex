@@ -1,0 +1,14 @@
+services:
+  knowlens:
+    build: .
+    container_name: knowlens
+    ports:
+      - "8633:8633"
+    env_file:
+      - .env
+    environment:
+      KNOWLENS_HOME: /data
+      KNOWLENS_HOST: 0.0.0.0
+    volumes:
+      - ./data:/data
+    restart: unless-stopped
