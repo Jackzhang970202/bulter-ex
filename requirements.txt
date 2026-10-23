@@ -1,0 +1,29 @@
+# 知鉴 KnowLens 运行依赖（Python 3.10+）
+# 核心服务
+fastapi>=0.115,<1
+uvicorn>=0.30
+python-multipart>=0.0.9
+# 模型调用
+litellm>=1.97
+openai>=1.70
+openai-agents>=0.18.1
+# PDF / PageIndex
+pypdfium2>=5
+PyPDF2>=3.0.0
+pdfplumber>=0.11
+sortedcontainers>=2.4
+regex>=2024.0.0
+python-dotenv>=1.0
+pyyaml>=6.0
+Pillow>=9.0
+requests>=2.28
+# Office 解析
+python-docx>=1.1
+python-pptx>=0.6
+openpyxl>=3.1
+# 录音转写（可选；缺失时录音管线会提示）
+faster-whisper>=1.0
+imageio-ffmpeg>=0.5
+
+# 可选加速：PyMuPDF 提供更快的 PDF 版面分析，但为 AGPL 许可，
+# 开源分发默认不安装。需要时自行 pip install pymupdf。

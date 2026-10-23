@@ -1,0 +1,11 @@
+* text=auto eol=lf
+
+# 第三方代码在 GitHub 语言统计中标记为 vendored
+web/vendor/*.min.js linguist-vendored
+vendor/pageindex/** linguist-vendored
+vendor/** linguist-vendored
+
+# 图片按二进制处理
+docs/images/*.png binary
+docs/images/*.jpg binary
+docs/images/*.jpeg binary

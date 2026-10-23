@@ -1,46 +1,28 @@
 # Python
 __pycache__/
-*.py[cod]
-*$py.class
-*.so
-*.egg
-*.egg-info/
-dist/
-build/
-*.whl
-
-# Virtual environments
-.venv/
-venv/
-env/
-
-# IDE
-.vscode/
-.idea/
-*.swp
-*.swo
-
-# Environment
-.env
-
-# Data (runtime)
-data/
-
-# Milvus / Qdrant
-milvus_data/
-*.sqlite
-*.db
-
-# OS
+*.pyc
+*.pyo
+.pytest_cache/
 .DS_Store
-Thumbs.db
 
-# Documents output
-*.docx
-.claude/
-web/
-待沉淀的金融报告智能体/
-specs/
-seed/
-_internal/
-*.md
+# Local configuration and secrets
+.env
+.env.local
+
+# Runtime data and build artifacts (project-root directories only;
+# the leading slash keeps vendor/pageindex/flash/data in the repository)
+/data/
+/_archive/
+/dist/
+/release/
+*.log
+*.bak
+*.tmp
+
+# Tests and temporary directories
+/_probe/
+
+# Local tooling
+/.claude/
+/.venv/
+/venv/
