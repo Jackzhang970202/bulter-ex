@@ -28,6 +28,7 @@ English | [简体中文](README.zh-CN.md)
 | Five-stage Q&A | Scope routing → page-level evidence gathering → sufficiency check → structured answer → citation verification. |
 | Verifiable citations | Citations point to document pages and can expand to the original text; invalid citations are removed. |
 | Two chat surfaces | Knowledge-base chat and temporary-material chat, plus a mini Q&A dock on each library page. |
+| In-space traceable assistant | Ask about the current library or document, or select any text/number to ask where it came from. Provenance cards show the source document/page/table/figure, formulas and inputs, and jump back to highlighted source text. |
 | Multimodal ingestion | PDF (text / scanned / mixed), Word, PPT, Excel, Markdown, images, and audio recordings. |
 | Image understanding | Each image is transcribed and semantically described, then inserted into the document in reading order and made searchable. |
 | Audio pipeline | ffmpeg normalization → ASR → timestamped transcript → structured meeting minutes (agenda / decisions / actions / terms). |
@@ -106,6 +107,7 @@ All configuration is supplied through environment variables or a local `.env` fi
 5. **Ask** — select libraries and tags in the composer. Answers have four sections: conclusion (yes / no / conditional / not covered), evidence with citations, method or improvement (model inference is labelled), and missing material. Expand **Intermediate process** to inspect routing, tool calls, and human-readable raw data.
 6. **Experience center** — review candidates with evidence replay, maintain rules, inspect and roll back releases, and view distillation history. Optionally configure Claude Code experience.
 7. **Cockpit** — monitor knowledge health, answer quality, ingestion trends, risks, and model usage.
+8. **Ask inside the knowledge space** — open the right-side assistant from a library or document, or select text/number in the document to ask "where does this number come from". Answers include a provenance card; click "open source" to jump to the page and highlight the excerpt. Panel conversations persist by scope.
 
 ## Multimodal behavior
 

@@ -4,6 +4,10 @@ This project follows [Keep a Changelog](https://keepachangelog.com/en/1.1.0/) an
 
 ## [Unreleased]
 
+### Added
+- In-space traceable Q&A assistant: ask about the current library or document; select any text/number to ask where it came from; provenance cards show source page/table/figure plus formulas and input sources; jump to the source page and highlight the excerpt; panel sessions persist by scope.
+- Audio ASR progress now reports a percentage based on audio duration (with a reliable WAV-frame duration probe) instead of a raw transcribed-second count.
+
 ### Planned
 - Hybrid lexical / vector recall for very large libraries
 - Space export and import

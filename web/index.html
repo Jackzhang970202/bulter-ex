@@ -62,6 +62,7 @@
     <header class="dw-head">
       <span class="dw-ic" id="dw-icon">📄</span>
       <div class="dw-title"><b id="dw-name"></b><small id="dw-lib"></small></div>
+      <button class="btn sm" id="dw-ask" title="针对这篇文档提问">💬 问这篇</button>
       <button class="btn ghost sm" id="dw-download" title="下载原件">⬇</button>
       <button class="btn ghost sm" id="dw-close">✕</button>
     </header>
@@ -69,14 +70,15 @@
     <div class="dw-resizer" id="dw-resizer" title="拖动调整宽度"></div>
   </aside>
 
-  <!-- 库详情：迷你问答 -->
-  <button class="kb-fab" id="kb-fab" title="直接问答这个库">💬</button>
+  <!-- 知识空间：可溯源问答助手 -->
+  <button class="kb-fab" id="kb-fab" title="问答当前库">💬</button>
   <div class="mini-chat" id="mini-chat">
     <header class="mc-head">
-      <span style="flex:1">💬 问答 · <b id="mc-lib"></b></span>
+      <span style="flex:1">💬 知识助手 · <b id="mc-lib"></b></span>
       <button class="btn ghost sm" id="mc-new" title="新对话">✚</button>
       <button class="btn ghost sm" id="mc-close">✕</button>
     </header>
+    <div class="mc-scope" id="mc-scope"></div>
     <div class="mc-msgs" id="mc-msgs"></div>
     <div class="mc-input">
       <textarea id="mc-q" rows="1" placeholder="针对本库提问，Enter 发送，Shift+Enter 换行"></textarea>
@@ -85,6 +87,10 @@
           <path d="M4 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
       </button>
     </div>
+  </div>
+  <div id="sel-toolbar" class="sel-toolbar">
+    <button data-act="ask">问 AI</button>
+    <button data-act="why">这个数怎么来的</button>
   </div>
 
   <div id="drop-mask"><div>松开鼠标：上传文件或整个文件夹到当前库（自动递归子目录）</div></div>

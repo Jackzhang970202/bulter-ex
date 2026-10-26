@@ -261,3 +261,40 @@
 .img-txt .md { font-size: 12px; line-height: 1.62; }
 .img-txt .md p { margin: 2px 0; }
 .img-txt .md ul, .img-txt .md ol { margin: 4px 0 4px 18px; }
+
+/* ══ 知识空间右侧可溯源助手 ══ */
+.mini-chat { right: 0; top: 64px; bottom: 0; height: auto; width: 430px;
+  border-radius: 18px 0 0 0; border-right: none; }
+.mc-scope { flex: none; display: flex; flex-wrap: wrap; gap: 6px;
+  padding: 8px 12px; border-bottom: 1px solid var(--border); }
+.mc-scope .chip { font-size: 11px; }
+.mc-scope .chip.on { border-color: var(--brand); }
+.mc-scope .x { margin-left: 4px; cursor: pointer; color: var(--text-3); }
+.sel-toolbar { position: fixed; display: none; z-index: 2000;
+  background: var(--bg-elev); border: 1px solid var(--border);
+  border-radius: 10px; box-shadow: var(--shadow-2); padding: 4px; gap: 2px; }
+.sel-toolbar.show { display: flex; }
+.sel-toolbar button { border: none; background: none; padding: 5px 10px;
+  font-size: 12px; border-radius: 6px; color: var(--text-2); cursor: pointer; }
+.sel-toolbar button:hover { background: var(--bg-hover); color: var(--text-1); }
+
+.prov { margin-top: 10px; border: 1px solid var(--border);
+  border-radius: 12px; background: var(--bg-elev); padding: 10px 12px; }
+.prov-title { font-size: 11.5px; font-weight: 700; color: var(--text-3);
+  letter-spacing: .05em; margin-bottom: 4px; }
+.prov-target { border-top: 1px dashed var(--border); padding: 8px 0; }
+.prov-target:first-of-type { border-top: none; padding-top: 2px; }
+.prov-head { display: flex; align-items: center; gap: 8px; margin-bottom: 4px; }
+.prov-value { font-weight: 700; font-size: 13px; }
+.prov-src { font-size: 12px; color: var(--text-2);
+  border-left: 2px solid var(--brand-100); padding: 3px 0 3px 8px; margin: 4px 0; }
+.prov-src .ex { color: var(--text-3); margin-top: 2px; font-size: 11.5px; }
+.prov-src a { color: var(--brand); cursor: pointer; font-size: 11.5px; }
+.prov-formula { font-family: var(--mono); font-size: 12px;
+  background: var(--g100); padding: 5px 8px; border-radius: 6px; margin: 4px 0; }
+.prov-inputs { font-size: 11.5px; color: var(--text-3); margin: 3px 0 0 4px; }
+.prov-missing { font-size: 11.5px; color: var(--warning); margin-top: 4px; }
+mark.hl-flash { background: rgba(255, 196, 0, .45); border-radius: 3px;
+  padding: 0 1px; animation: hlFade 4.5s forwards; }
+@keyframes hlFade { 0%, 70% { background: rgba(255,196,0,.45); }
+  100% { background: transparent; } }

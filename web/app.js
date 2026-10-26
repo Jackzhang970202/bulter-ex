@@ -13,7 +13,11 @@ const state = {
   scopeLibs: [], scopeTags: [], adhocFiles: [], refLibs: false,
   histCursor: 0,
   drawer: { did: null, doc: null, tree: null, page: 1, mode: "page", timer: null },
-  mini: { open: false, libId: null, sessions: {}, running: false },
+  mini: {
+    open: false, libId: null, sessions: {}, running: false,
+    scope: { type: "library", docId: null, dbId: null, docName: "",
+             page: 0, selection: "", before: "", after: "" },
+  },
 };
 
 /* ── 基础工具 ── */
@@ -101,6 +105,104 @@ function renderAnswerHTML(text, verdict, compact) {
   }).join("");
 }
 
+function encArg(s) {
+  return encodeURIComponent(String(s || "")).replace(/'/g, "%27");
+}
+
+function renderProvenance(prov, compact) {
+  if (!prov || !prov.length) return "";
+  const meta = {
+    direct: { cls: "ok", label: "原文直接给出" },
+    derived: { cls: "warn", label: "由资料计算" },
+    not_found: { cls: "gray", label: "未找到" },
+  };
+  return `<div class="prov">
+    <div class="prov-title">溯源</div>
+    ${prov.map(t => {
+      const st = meta[t.status] || meta.not_found;
+      const srcs = (t.sources || []).map(s => `
+        <div class="prov-src">
+          <a onclick="jumpToSource('${esc(s.db_id || "")}','${s.page || 0}',
+            '${encArg((s.excerpt || "").slice(0, 80))}')">打开原文</a>
+          <span>${esc(s.doc_name || "")} · 第 ${s.page || "?"} 页 · ${esc(s.kind || "text")}</span>
+          ${s.excerpt ? `<div class="ex">${esc(s.excerpt.slice(0, 160))}</div>` : ""}
+        </div>`).join("");
+      const d = t.derivation || {};
+      const deriv = (d.formula || (d.inputs || []).length) ? `
+        <div class="prov-formula">${esc(d.formula || "")}</div>
+        <div class="prov-inputs">${(d.inputs || []).map(x =>
+          `· ${esc(x.value)} — ${esc(x.source)}`).join("<br>")}</div>` : "";
+      const miss = (t.missing || []).length
+        ? `<div class="prov-missing">缺失：${t.missing.map(esc).join("；")}</div>` : "";
+      return `<div class="prov-target">
+        <div class="prov-head"><span class="badge ${st.cls}">${st.label}</span>
+          <span class="prov-value">${esc(t.value || "")}</span></div>
+        ${srcs}${deriv}${miss}</div>`;
+    }).join("")}
+  </div>`;
+}
+
+async function jumpToSource(dbId, page, enc) {
+  const excerpt = decodeURIComponent(enc || "");
+  await openDocAtPage(dbId, page, excerpt);
+}
+
+async function openDocAtPage(dbId, page, excerpt) {
+  if (!dbId) return;
+  let d = state.docs.find(x => x.id === dbId);
+  if (!d && state.lib) {
+    try { state.docs = await api(`/api/libraries/${state.lib}/documents`); }
+    catch (e) {}
+    d = state.docs.find(x => x.id === dbId);
+  }
+  if (!d) return toast("未找到该文档，请先打开所属库", "err");
+  if (state.drawer.did !== dbId) await openDocDrawer(dbId);
+  state.drawer.mode = "page";
+  state.drawer.page = Math.max(1, page || 1);
+  drawDrawerContent();
+  await new Promise(r => setTimeout(r, 250));
+  await loadDrawerPage();
+  if (excerpt) highlightExcerpt(excerpt);
+}
+
+function highlightExcerpt(needle) {
+  const body = document.querySelector("#pg-body");
+  if (!body || !needle) return;
+  const clean = String(needle).replace(/[*#|>`]/g, " ").replace(/\s+/g, " ").trim();
+  if (!clean) return;
+  const attempts = [clean.slice(0, 60), clean.slice(0, 40),
+    clean.slice(0, 20), clean.slice(0, 10)].filter(s => s.length >= 6);
+  const full = body.textContent || "";
+  let hit = null;
+  for (const a of attempts) {
+    const idx = full.indexOf(a);
+    if (idx >= 0) { hit = { needle: a, idx }; break; }
+  }
+  if (!hit) { toast("原文页已打开，摘录未精确匹配"); return; }
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  let node, pos = 0, found = null;
+  while ((node = walker.nextNode())) {
+    const len = node.nodeValue.length;
+    if (hit.idx < pos + len) { found = { node, off: hit.idx - pos }; break; }
+    pos += len;
+  }
+  if (!found) return;
+  const val = found.node.nodeValue;
+  const end = Math.min(val.length, found.off + hit.needle.length);
+  const mark = document.createElement("mark");
+  mark.className = "hl-flash";
+  mark.textContent = val.slice(found.off, end);
+  const parent = found.node.parentNode;
+  parent.insertBefore(document.createTextNode(val.slice(0, found.off)), found.node);
+  parent.insertBefore(mark, found.node);
+  parent.insertBefore(document.createTextNode(val.slice(end)), found.node);
+  parent.removeChild(found.node);
+  mark.scrollIntoView({ block: "center", behavior: "smooth" });
+  setTimeout(() => {
+    if (mark.parentNode) mark.replaceWith(document.createTextNode(mark.textContent));
+  }, 5200);
+}
+
 const KIND_ICON = { pdf: "📄", docx: "📃", pptx: "📊", xlsx: "📈", xls: "📈",
   md: "📝", txt: "📝", audio: "🎙️", image: "🖼️", unknown: "📎" };
 const VERDICT_CLS = { "能": "ok", "不能": "err", "有条件": "warn",
@@ -144,6 +246,7 @@ async function boot() {
   $("#dw-close").onclick = closeDrawer;
   initDrawerResizer();
   initMiniChat();
+  initSelectionToolbar();
   try {
     const st = await api("/api/status");
     $("#model-info").textContent = `${st.channel} · ${st.model}` + (st.ffmpeg ? "" : " · 无ffmpeg");
@@ -459,15 +562,13 @@ function initDashboardCharts(d) {
     grid: { left: 6, right: 6, top: 34, bottom: 2, containLabel: true },
     xAxis: { type: "category", data: days, axisLine: { show: false },
       axisTick: { show: false }, axisLabel },
-    yAxis: [
-      { type: "value", splitLine: { lineStyle: { color: border, type: "dashed" } }, axisLabel },
-      { type: "value", splitLine: { show: false }, axisLabel: { show: false } },
-    ],
+    yAxis: { type: "value", minInterval: 1,
+      splitLine: { lineStyle: { color: border, type: "dashed" } }, axisLabel },
     series: [
       { name: "问答", type: "line", smooth: true, symbol: "circle", symbolSize: 5,
         lineStyle: { width: 3 }, areaStyle: { opacity: .16 },
         data: d.trend.map(x => x.qa) },
-      { name: "入库", type: "bar", yAxisIndex: 1, barWidth: 8,
+      { name: "入库", type: "bar", barWidth: 8,
         itemStyle: { borderRadius: [4, 4, 0, 0], color: "rgba(25,197,214,.55)" },
         data: d.trend.map(x => x.docs) },
     ],
@@ -991,6 +1092,7 @@ async function openDocDrawer(did) {
   const lib = state.libs.find(l => l.id === d.library_id);
   $("#dw-lib").textContent = lib ? "库：" + lib.name : "";
   $("#dw-download").onclick = () => window.open(`/api/documents/${did}/download`);
+  $("#dw-ask").onclick = askDocument;
   drawDrawerBody();
   try {
     state.drawer.images = await api(`/api/documents/${did}/images`);
@@ -1614,6 +1716,10 @@ function syncLiveFeedback(shell, live, r) {
 function applyLiveResult(shell, live, r) {
   const cites = live.result.citations || [];
   if (cites.length) renderCites(r.cites, cites);
+  if ((live.result.provenance || []).length) {
+    r.cites.insertAdjacentHTML("beforeend",
+      renderProvenance(live.result.provenance));
+  }
   r.fb.style.display = "flex";
   r.fb.dataset.event = live.qaEvent || live.result.qa_event || "";
   bindFeedback(shell);
@@ -1805,6 +1911,10 @@ async function reloadSession() {
       shell.querySelector(".ans-wrap").innerHTML =
         renderAnswerHTML(m.content, meta.verdict);
       renderCites(shell.querySelector(".citations"), meta.citations || []);
+      if ((meta.provenance || []).length) {
+        shell.querySelector(".citations").insertAdjacentHTML("beforeend",
+          renderProvenance(meta.provenance));
+      }
       const steps = shell.querySelector(".steps");
       if (meta.route && meta.route.docs) {
         const d0 = document.createElement("div"); d0.className = "step";
@@ -1826,10 +1936,21 @@ async function reloadSession() {
 }
 
 /* ══════════ 迷你问答窗（库详情右下 FAB） ══════════ */
+function miniKey() {
+  const sc = state.mini.scope || {};
+  return `${state.mini.libId || ""}|${sc.type || "library"}|${sc.docId || ""}`;
+}
+function defaultMiniScope() {
+  return { type: "library", docId: null, dbId: null, docName: "",
+           page: 0, selection: "", before: "", after: "" };
+}
+function truncateText(s, n) {
+  s = String(s || "").replace(/\s+/g, " ").trim();
+  return s.length > n ? s.slice(0, n) + "…" : s;
+}
 function initMiniChat() {
   $("#kb-fab").onclick = () => {
     const shown = $("#mini-chat").classList.contains("show");
-    // 点击切换：已展开则收起；换库或未展开则打开
     if (shown && state.mini.libId === state.lib) {
       $("#mini-chat").classList.remove("show");
       state.mini.open = false;
@@ -1837,10 +1958,15 @@ function initMiniChat() {
       openMiniFor(state.lib);
     }
   };
-  $("#mc-close").onclick = () => { $("#mini-chat").classList.remove("show"); state.mini.open = false; };
+  $("#mc-close").onclick = () => {
+    $("#mini-chat").classList.remove("show");
+    state.mini.open = false;
+  };
   $("#mc-new").onclick = () => {
-    if (state.mini.libId) delete state.mini.sessions[state.mini.libId];
-    $("#mc-msgs").innerHTML = `<div class="muted" style="text-align:center;padding:20px;font-size:12px">新对话 · 检索范围锁定本库</div>`;
+    if (state.mini.running) return toast("回答中，请稍候", "err");
+    delete state.mini.sessions[miniKey()];
+    miniWelcome();
+    drawMiniScope();
   };
   $("#mc-send").onclick = miniAsk;
   $("#mc-q").addEventListener("keydown", e => {
@@ -1850,26 +1976,179 @@ function initMiniChat() {
     miniAsk();
   });
 }
+function scopePlaceholder() {
+  const sc = state.mini.scope || {};
+  if (sc.type === "selection") return "针对选中片段提问，Enter 发送…";
+  if (sc.type === "document") return `针对《${truncateText(sc.docName, 20)}》提问…`;
+  return "针对本库提问，Enter 发送，Shift+Enter 换行";
+}
+function miniWelcome() {
+  const lib = state.libs.find(l => l.id === state.mini.libId);
+  const sc = state.mini.scope || {};
+  let text;
+  if (sc.type === "selection") {
+    text = `已选中「${esc(truncateText(sc.selection, 60))}」。<br>
+      可直接问“这个数怎么来的”、原文出处或它的含义。`;
+  } else if (sc.type === "document") {
+    text = `针对《${esc(truncateText(sc.docName, 30))}》提问。<br>
+      回答会尽量给出页码与原文；选中正文中的文字可直接问来源。`;
+  } else {
+    text = `直接问答「${esc(lib?.name || "")}」（${lib?.doc_count || 0} 篇）。<br>
+      回答会给出引用；点引用或溯源卡可跳回原文。`;
+  }
+  $("#mc-msgs").innerHTML = `<div class="muted"
+    style="text-align:center;padding:20px;font-size:12px">💬 ${text}</div>`;
+}
+function drawMiniScope() {
+  const lib = state.libs.find(l => l.id === state.mini.libId);
+  const sc = state.mini.scope || {};
+  let html = `<span class="chip ${sc.type === "library" ? "on" : ""}"
+    onclick="setMiniScope('library')">本库：${esc(truncateText(lib?.name || "", 14))}</span>`;
+  if (sc.docId) {
+    html += `<span class="chip ${sc.type === "document" ? "on" : ""}"
+      onclick="setMiniScope('document')">本文档：${esc(truncateText(sc.docName, 16))}</span>`;
+  }
+  if (sc.selection) {
+    html += `<span class="chip on">选中：${esc(truncateText(sc.selection, 16))}
+      <span class="x" onclick="clearMiniSelection()">✕</span></span>`;
+  }
+  $("#mc-scope").innerHTML = html;
+  $("#mc-q").placeholder = scopePlaceholder();
+}
+function setMiniScope(type) {
+  if (state.mini.running) return toast("回答中，请稍候", "err");
+  const sc = state.mini.scope || {};
+  if (type === "library") {
+    state.mini.scope = defaultMiniScope();
+  } else if (type === "document") {
+    if (!sc.docId) return;
+    state.mini.scope = { ...defaultMiniScope(), type: "document",
+      docId: sc.docId, dbId: sc.dbId, docName: sc.docName, page: sc.page };
+  }
+  drawMiniScope();
+  const sid = state.mini.sessions[miniKey()];
+  $("#mc-msgs").innerHTML = "";
+  if (sid) restoreMini(sid); else miniWelcome();
+}
+function clearMiniSelection() {
+  const sc = state.mini.scope || {};
+  if (!sc.docId) return;
+  state.mini.scope = { ...defaultMiniScope(), type: "document",
+    docId: sc.docId, dbId: sc.dbId, docName: sc.docName, page: sc.page };
+  drawMiniScope();
+  const sid = state.mini.sessions[miniKey()];
+  $("#mc-msgs").innerHTML = "";
+  if (sid) restoreMini(sid); else miniWelcome();
+}
 function openMiniFor(lid) {
   const lib = state.libs.find(l => l.id === lid);
   if (!lib) return;
+  if (state.mini.running) return toast("回答中，请稍候", "err");
   state.mini.libId = lid;
+  state.mini.scope = defaultMiniScope();
+  openMiniPanel();
+}
+async function openMiniPanel() {
+  const lib = state.libs.find(l => l.id === state.mini.libId);
+  if (!lib) return;
   state.mini.open = true;
   $("#mc-lib").textContent = lib.name;
   $("#mini-chat").classList.add("show");
-  const box = $("#mc-msgs");
-  ensureScrollGuard(box);
-  // 正在为同一个库流式回答：保留直播 DOM，不能用服务端历史覆盖
-  if (state.mini.running && state.mini.runningLibId === lid) return;
-  const sid = state.mini.sessions[lid];
-  if (!sid) {
-    box.innerHTML = `<div class="muted" style="text-align:center;padding:20px;font-size:12px">
-      💬 直接问答「${esc(lib.name)}」（${lib.doc_count} 篇）。<br>此窗口独立会话，右上角 ✚ 新对话，✕ 关闭。</div>`;
+  drawMiniScope();
+  ensureScrollGuard($("#mc-msgs"));
+  const key = miniKey();
+  if (state.mini.running && state.mini.runningKey === key) return;
+  if (!state.mini.sessions[key]) {
+    try {
+      const rows = await api(`/api/spaces/${state.space}/sessions?mode=kb`);
+      const sc = state.mini.scope || {};
+      const match = rows.find(s => {
+        let x = {};
+        try { x = JSON.parse(s.scope || "{}"); } catch (e) { return false; }
+        if (!x.panel) return false;
+        if (!(x.library_ids || []).includes(state.mini.libId)) return false;
+        const ds = x.doc_ids || [];
+        if (sc.docId) return ds.includes(sc.docId);
+        return ds.length === 0 && sc.type === "library";
+      });
+      if (match) state.mini.sessions[key] = match.id;
+    } catch (e) {}
+  }
+  if (miniKey() !== key) return;
+  const sid = state.mini.sessions[key];
+  $("#mc-msgs").innerHTML = "";
+  if (sid) restoreMini(sid); else miniWelcome();
+}
+function askDocument() {
+  const d = state.drawer.doc;
+  if (!d) return;
+  state.mini.libId = d.library_id;
+  state.mini.scope = { ...defaultMiniScope(), type: "document",
+    docId: d.doc_id, dbId: d.id, docName: d.name,
+    page: state.drawer.page || 1 };
+  closeDrawer();
+  openMiniPanel();
+}
+function askSelection(action) {
+  const ctx = state._selContext;
+  const d = state.drawer.doc;
+  if (!ctx || !d) return toast("请先在文档正文中选中内容", "err");
+  state.mini.libId = d.library_id;
+  state.mini.scope = { type: "selection", docId: d.doc_id, dbId: d.id,
+    docName: d.name, page: ctx.page || (state.drawer.page || 1),
+    selection: ctx.text, before: ctx.before, after: ctx.after };
+  $("#sel-toolbar").classList.remove("show");
+  closeDrawer();
+  openMiniPanel();
+  if (action === "why") {
+    $("#mc-q").value = "这个数怎么来的？请给出计算依据或原文出处。";
+    miniAsk();
   } else {
-    restoreMini(lid, sid);
+    $("#mc-q").focus();
   }
 }
-async function restoreMini(lid, sid) {
+function initSelectionToolbar() {
+  const tb = $("#sel-toolbar");
+  document.addEventListener("mouseup", e => {
+    if (e.target.closest("#sel-toolbar")) return;
+    setTimeout(() => {
+      const sel = window.getSelection();
+      const text = sel ? String(sel).trim() : "";
+      const pg = $("#pg-body");
+      if (!pg || !text || !sel.rangeCount
+          || !pg.contains(sel.anchorNode) || !pg.contains(sel.focusNode)) {
+        tb.classList.remove("show");
+        return;
+      }
+      const full = pg.textContent || "";
+      const idx = full.indexOf(text);
+      state._selContext = {
+        text: text.slice(0, 500),
+        page: state.drawer.page || 1,
+        before: idx >= 0 ? full.slice(Math.max(0, idx - 300), idx) : "",
+        after: idx >= 0 ? full.slice(idx + text.length,
+                                     idx + text.length + 300) : "",
+      };
+      const r = sel.getRangeAt(0).getBoundingClientRect();
+      tb.style.left = Math.min(window.innerWidth - 250,
+                               Math.max(10, r.left)) + "px";
+      tb.style.top = Math.max(70, r.top - 46) + "px";
+      tb.classList.add("show");
+    }, 0);
+  });
+  tb.querySelectorAll("button").forEach(b => b.onclick =
+    () => askSelection(b.dataset.act));
+  document.addEventListener("mousedown", e => {
+    if (!e.target.closest("#sel-toolbar")) tb.classList.remove("show");
+  });
+}
+function miniCitesHTML(cites) {
+  if (!cites || !cites.length) return "";
+  return `<div class="mc-meta" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">引用 ${cites.length} 处 ▾</div>
+    <div class="mc-cites" style="font-size:11px;color:var(--text-3);display:none;margin-top:4px">
+    ${cites.map(c => `· ${esc(c.doc_name)} p${c.page}`).join("<br>")}</div>`;
+}
+async function restoreMini(sid) {
   const box = $("#mc-msgs");
   try {
     const s = await api(`/api/sessions/${sid}`);
@@ -1882,22 +2161,15 @@ async function restoreMini(lid, sid) {
       else {
         const meta = m.meta || {};
         b.innerHTML = `${renderAnswerHTML(m.content, meta.verdict, true)}
-          <div class="mc-meta">引用 ${((meta.citations || []).length)} 处${(meta.citations || []).length ? " ▾" : ""}</div>`;
-        const cites = meta.citations || [];
-        if (cites.length) {
-          const li = document.createElement("div");
-          li.style.cssText = "font-size:11px;color:var(--text-3);display:none;margin-top:4px";
-          li.innerHTML = cites.map(c => `· ${esc(c.doc_name)} p${c.page}`).join("<br>");
-          b.appendChild(li);
-          b.querySelector(".mc-meta").onclick = () => li.style.display = li.style.display === "none" ? "" : "none";
-        }
+          ${miniCitesHTML(meta.citations || [])}
+          ${renderProvenance(meta.provenance || [], true)}`;
       }
       box.appendChild(b);
     }
     box.scrollTop = box.scrollHeight;
   } catch (e) {
-    delete state.mini.sessions[lid];
-    box.innerHTML = `<div class="muted" style="text-align:center;padding:20px;font-size:12px">新对话 · 检索范围锁定本库</div>`;
+    delete state.mini.sessions[miniKey()];
+    miniWelcome();
   }
 }
 async function miniAsk() {
@@ -1905,12 +2177,15 @@ async function miniAsk() {
   if (!q || state.mini.running) return;
   state.mini.running = true;
   state.mini.runningLibId = state.mini.libId;
+  const key = miniKey();
+  state.mini.runningKey = key;
   $("#mc-send").disabled = true;
   const box = $("#mc-msgs");
   ensureScrollGuard(box);
   box._paused = false;
   const tip = box.querySelector(".muted"); if (tip) tip.remove();
-  const u = document.createElement("div"); u.className = "m u"; u.textContent = q;
+  const u = document.createElement("div"); u.className = "m u";
+  u.textContent = q;
   box.appendChild(u);
   const a = document.createElement("div"); a.className = "m a";
   a.innerHTML = `<span class="pulse"></span> 检索中…`;
@@ -1918,14 +2193,21 @@ async function miniAsk() {
   box.scrollTop = box.scrollHeight;
   $("#mc-q").value = "";
   let acc = "";
+  const sc = state.mini.scope || {};
   const reqBody = {
-    space_id: state.space, mode: "kb", question: q,
-    session_id: state.mini.sessions[state.mini.libId] || null,
+    space_id: state.space, mode: "kb", question: q, panel: true,
+    session_id: state.mini.sessions[key] || null,
     library_ids: [state.mini.libId], tag_ids: [],
+    doc_ids: sc.docId ? [sc.docId] : [],
+    focus: sc.type === "selection" ? {
+      document_id: sc.docId, db_id: sc.dbId, page: sc.page,
+      selection_text: sc.selection, selection_before: sc.before,
+      selection_after: sc.after,
+    } : null,
   };
   try {
     await sseStream("/api/qa/stream", reqBody, ev => {
-      if (ev.type === "start") state.mini.sessions[state.mini.libId] = ev.session_id;
+      if (ev.type === "start") state.mini.sessions[key] = ev.session_id;
       else if (ev.type === "answer") {
         acc += ev.delta;
         const follow = canFollow(box);
@@ -1933,17 +2215,10 @@ async function miniAsk() {
         if (follow) box.scrollTop = box.scrollHeight;
       } else if (ev.type === "result") {
         const finalText = ev.answer || acc;
-        const cites = ev.citations || [];
         const follow = canFollow(box);
         a.innerHTML = `${renderAnswerHTML(finalText, ev.verdict, true)}
-          <div class="mc-meta">引用 ${cites.length} 处${cites.length ? " ▾" : ""}</div>`;
-        if (cites.length) {
-          const li = document.createElement("div");
-          li.style.cssText = "font-size:11px;color:var(--text-3);display:none;margin-top:4px";
-          li.innerHTML = cites.map(c => `· ${esc(c.doc_name)} p${c.page}`).join("<br>");
-          a.appendChild(li);
-          a.querySelector(".mc-meta").onclick = () => li.style.display = li.style.display === "none" ? "" : "none";
-        }
+          ${miniCitesHTML(ev.citations || [])}
+          ${renderProvenance(ev.provenance || [], true)}`;
         if (follow) box.scrollTop = box.scrollHeight;
       } else if (ev.type === "error") {
         a.innerHTML = `<span style="color:var(--error)">${esc(ev.message)}</span>`;
@@ -1954,6 +2229,7 @@ async function miniAsk() {
   }
   state.mini.running = false;
   state.mini.runningLibId = null;
+  state.mini.runningKey = null;
   $("#mc-send").disabled = false;
   loadHistory();
 }

@@ -44,14 +44,17 @@ ROUTER_PROMPT = (
 )
 
 
-def candidate_docs(space_id, library_ids, tag_ids):
-    """Filter candidate documents by library/tag (including the description from PI meta)."""
+def candidate_docs(space_id, library_ids, tag_ids, doc_ids=None):
+    """Filter candidate documents by library/tag/document (including the description from PI meta)."""
     metas = {m["id"]: m for m in kb.list_metas(space_id)}
     rows = db.q(
         "SELECT * FROM documents WHERE space_id=? AND status='ready'",
         (space_id,))
     if library_ids:
         rows = [r for r in rows if r["library_id"] in set(library_ids)]
+    if doc_ids:
+        allowed = set(doc_ids)
+        rows = [r for r in rows if r["doc_id"] in allowed]
     if tag_ids:
         tagged = {t["document_id"] for t in db.q(
             "SELECT document_id, tag_id FROM doc_tags")}
@@ -121,7 +124,8 @@ def route(space_id, question, docs, digest):
 
 def answer(space_id, question, library_ids=None, tag_ids=None,
            history=None, digest="", on_event=None, mode="kb",
-           temp_context="", temp_doc_ids=None, temp_docs=None):
+           temp_context="", temp_doc_ids=None, temp_docs=None,
+           doc_ids=None, focus=None):
     """Execute one complete Q&A turn. history contains the visible messages of the existing conversation.
 
     mode="kb": scope = selected libraries in the space (+ tag filter), using the five-stage pipeline.
@@ -134,7 +138,7 @@ def answer(space_id, question, library_ids=None, tag_ids=None,
         return _answer_direct(space, question, history, temp_context,
                               digest, emit)
     docs = temp_docs if mode == "adhoc" else candidate_docs(
-        space_id, library_ids, tag_ids)
+        space_id, library_ids, tag_ids, doc_ids)
     if not docs and not temp_context:
         emit({"type": "result", "verdict": "未覆盖",
               "answer": "当前范围内还没有可用的知识库文档。请先在库中上传并等待索引完成。",
@@ -145,6 +149,16 @@ def answer(space_id, question, library_ids=None, tag_ids=None,
 
     if mode == "adhoc":
         plan = {"docs": [d["doc_id"] for d in docs], "queries": [question]}
+    elif doc_ids or focus:
+        emit({"type": "stage", "stage": "router",
+              "detail": "按当前文档范围检索"})
+        ordered = docs
+        if focus and focus.get("document_id"):
+            ordered = sorted(
+                docs, key=lambda d: 0 if d["doc_id"] == focus["document_id"]
+                else 1)
+        plan = {"docs": [d["doc_id"] for d in ordered[:8]],
+                "queries": [question]}
     else:
         emit({"type": "stage", "stage": "router", "detail": "范围路由中"})
         plan = route(space_id, question, docs, digest)
@@ -159,18 +173,36 @@ def answer(space_id, question, library_ids=None, tag_ids=None,
         sys_prompt += "\n\n部门认知（发行版，优先级低于用户当前问题中的明确指令）：\n" + digest
     if temp_context:
         sys_prompt += "\n\n本次会话临时资料：\n" + temp_context
+    if focus:
+        fdoc = next((d for d in docs
+                     if d["doc_id"] == focus.get("document_id")), None)
+        fname = (fdoc or {}).get("name") or focus.get("doc_name") or ""
+        page = focus.get("page") or 0
+        sel = (focus.get("selection_text") or "").strip()
+        before = (focus.get("selection_before") or "").strip()[:300]
+        after = (focus.get("selection_after") or "").strip()[:300]
+        block = f"\n\n用户当前查看的上下文：\n文档：《{fname}》"
+        if page:
+            block += f" 第 {page} 页"
+        if sel:
+            block += (f"\n选中片段：「{sel[:500]}」\n上文：{before}\n下文：{after}"
+                      "\n请优先围绕该片段回答；涉及任何数字或结论时，"
+                      "说明其原文出处或计算方式。")
+        sys_prompt += block
 
     instructions = sys_prompt
     messages = list(history or [])
     qtext = "\n".join(plan["queries"]) if plan["queries"] != [question] \
         else question
+    if focus and focus.get("selection_text"):
+        qtext += "\n关注片段：" + focus["selection_text"][:300]
     messages.append({"role": "user", "content":
                      f"检索重点：{qtext}\n原始问题：{question}"})
 
     emit({"type": "stage", "stage": "retrieve",
           "detail": f"检索导航中（{len(picked)} 个文档）"})
     t0 = time.time()
-    full, thinking_len, tools = _run_chat(
+    full, thinking_len, tools, tool_outputs = _run_chat(
         client, messages, [d["doc_id"] for d in picked], instructions, emit)
     emit({"type": "stage", "stage": "synthesize",
           "detail": f"引用验证与结构化（检索耗时 {time.time()-t0:.0f}s）"})
@@ -189,11 +221,12 @@ def answer(space_id, question, library_ids=None, tag_ids=None,
         extra = [d["doc_id"] for d in docs
                  if d["doc_id"] not in plan["docs"]][:8]
         if extra:
-            full2, _, tools2 = _run_chat(
+            full2, _, tools2, tool_outputs2 = _run_chat(
                 client, messages, [d["doc_id"] for d in picked] + extra,
                 instructions + "\n上一轮未找到足够证据，请扩大检索。", emit)
             if len(full2) > len(full):
                 full = full2
+                tool_outputs = tool_outputs2
                 verdict = _detect_verdict(full)
                 citations = _validate_citations(space_id, full, docs)
                 answer_clean = _strip_cites(full)
@@ -201,8 +234,16 @@ def answer(space_id, question, library_ids=None, tag_ids=None,
                 answer_clean = re.sub(
                     r'【结论】\s*【判定[:：][^】]*】', "【结论】", answer_clean)
 
+    provenance = []
+    if _needs_provenance(question, focus):
+        emit({"type": "stage", "stage": "provenance",
+              "detail": "数值与事实溯源核验中"})
+        provenance = _build_provenance(space_id, question, answer_clean,
+                                       picked, tool_outputs, citations, focus)
+
     result = {"verdict": verdict, "answer": answer_clean,
               "citations": citations, "missing": missing,
+              "provenance": provenance,
               "route_docs": [d["doc_id"] for d in picked]}
     emit({"type": "result", **{k: v for k, v in result.items()
                                if k != "route_docs"},
@@ -210,12 +251,161 @@ def answer(space_id, question, library_ids=None, tag_ids=None,
     return result
 
 
+def _needs_provenance(question, focus):
+    if focus:
+        return True
+    q = question or ""
+    return bool(re.search(r"\d", q)) or any(
+        k in q for k in ("怎么来的", "来源", "出处", "依据", "怎么算",
+                         "如何计算", "推导"))
+
+
+def _collect_pages(obj, out, depth=0):
+    """Recursively extract {doc, page, text} from pageindex tool outputs."""
+    if depth > 3 or len(out) > 30:
+        return
+    if isinstance(obj, str):
+        s = obj.strip()
+        if s.startswith(("{", "[")):
+            try:
+                _collect_pages(json.loads(s), out, depth + 1)
+            except Exception:
+                pass
+        return
+    if isinstance(obj, dict):
+        doc = obj.get("doc_name") or obj.get("document") or ""
+        pages = obj.get("pages")
+        if isinstance(pages, list):
+            for p in pages:
+                if not isinstance(p, dict):
+                    continue
+                md = p.get("markdown") or p.get("content") or p.get("text") or ""
+                if isinstance(md, str) and md.strip():
+                    out.append({"doc": doc,
+                                "page": p.get("page_index") or p.get("page") or 0,
+                                "text": md})
+        for v in obj.values():
+            if isinstance(v, (dict, list)):
+                _collect_pages(v, out, depth + 1)
+    elif isinstance(obj, list):
+        for v in obj:
+            _collect_pages(v, out, depth + 1)
+
+
+PROVENANCE_PROMPT = (
+    "你是资料溯源助手。只依据“证据”和“引用摘录”，对问题、回答以及选中片段中的"
+    "关键数值或事实做溯源，禁止使用模型常识补充。\n"
+    "规则：\n"
+    "1) 数字直接出现在证据中 → status=direct，sources 给出文档名、页码、原文摘录；\n"
+    "2) 数字由证据中的数值计算得出 → status=derived，给出 formula 和每个输入值的 source；\n"
+    "3) 证据中找不到 → status=not_found，并在 missing 说明缺什么；\n"
+    "4) sources.doc 必须是证据/引用中出现的文档名；page 必须是整数；\n"
+    "5) 最多 5 个 targets；若选中片段不是数字，也要把该片段作为一个事实目标溯源。\n"
+    "只输出 JSON：{{\"targets\":[{{\"value\":\"...\","
+    "\"status\":\"direct|derived|not_found\","
+    "\"sources\":[{{\"doc\":\"...\",\"page\":1,\"excerpt\":\"...\","
+    "\"kind\":\"text|table|figure\"}}],"
+    "\"derivation\":{{\"formula\":\"...\",\"inputs\":[{{\"value\":\"...\","
+    "\"source\":\"...\"}}]}},\"missing\":[\"...\"]}}]}}"
+)
+
+
+def _resolve_source(space_id, picked, src):
+    if not isinstance(src, dict):
+        return None
+    doc = str(src.get("doc") or "").strip()
+    d = next((x for x in picked
+              if x["name"] == doc or x["doc_id"] == doc), None)
+    if not d:
+        return None
+    try:
+        page = int(src.get("page") or 0)
+    except (TypeError, ValueError):
+        return None
+    meta = kb.get_meta(space_id, d["doc_id"]) or {}
+    if page < 1 or page > (meta.get("pageNum") or 0):
+        return None
+    return {"doc_id": d["doc_id"], "db_id": d.get("db_id", ""),
+            "doc_name": d["name"], "page": page,
+            "excerpt": str(src.get("excerpt") or "")[:400],
+            "kind": str(src.get("kind") or "text")[:12]}
+
+
+def _build_provenance(space_id, question, answer_text, picked,
+                      tool_outputs, citations, focus):
+    pages = []
+    for out in tool_outputs or []:
+        _collect_pages(out, pages)
+    evidence = []
+    used = 0
+    for p in pages:
+        if used >= 12000:
+            break
+        text = (p.get("text") or "")[:1500]
+        evidence.append(f"[{p.get('doc') or '?'} p{p.get('page')}] {text}")
+        used += len(text)
+    for c in citations or []:
+        evidence.append(f"[{c.get('doc_name')} p{c.get('page')}] "
+                        f"{(c.get('excerpt') or '')[:800]}")
+    catalog = "\n".join(f"- {d['name']} (doc_id={d['doc_id']})"
+                        for d in picked)
+    sel = ((focus or {}).get("selection_text") or "").strip()
+    user = (f"文档目录：\n{catalog}\n\n证据：\n" + "\n\n".join(evidence) +
+            f"\n\n问题：{question}\n\n回答：{answer_text[:4000]}")
+    if sel:
+        user += f"\n\n选中片段：{sel[:500]}"
+    try:
+        obj, _ = llm.complete_json(
+            [{"role": "system", "content": PROVENANCE_PROMPT},
+             {"role": "user", "content": user}], max_tokens=1600)
+    except Exception:
+        return []
+    targets = []
+    for t in (obj.get("targets") or [])[:5]:
+        if not isinstance(t, dict):
+            continue
+        sources = []
+        for s in (t.get("sources") or [])[:6]:
+            r = _resolve_source(space_id, picked, s)
+            if r:
+                sources.append(r)
+        status = str(t.get("status") or "").strip()
+        if status not in ("direct", "derived", "not_found"):
+            status = "direct" if sources else "not_found"
+        if status in ("direct", "derived") and not sources:
+            status = "not_found"
+        deriv = {}
+        if status == "derived":
+            d = t.get("derivation") or {}
+            deriv = {"formula": str(d.get("formula") or "")[:300],
+                     "inputs": [{"value": str(x.get("value") or "")[:120],
+                                 "source": str(x.get("source") or "")[:200]}
+                                for x in (d.get("inputs") or [])[:6]
+                                if isinstance(x, dict)]}
+        targets.append({
+            "value": str(t.get("value") or "")[:120],
+            "status": status,
+            "sources": sources,
+            "derivation": deriv,
+            "missing": [str(x)[:200] for x in (t.get("missing") or [])[:5]],
+        })
+    if not targets and sel:
+        targets.append({"value": sel[:120], "status": "not_found",
+                        "sources": [], "derivation": {},
+                        "missing": ["未在资料中找到该片段的出处"]})
+    return targets
+
+
 def _run_chat(client, messages, doc_ids, instructions, emit):
-    """Run one pageindex agent retrieval loop and forward its events. Returns (answer_text, thinking_len, tools)."""
+    """Run one pageindex agent retrieval loop and forward its events.
+
+    Returns (answer_text, thinking_len, tools, tool_outputs); tool_outputs keep
+    the page contents returned by the tools for the provenance stage.
+    """
     stream = client.chat(messages, doc_id=doc_ids, stream=True,
                          citations=True, instructions=instructions,
                          max_turns=config.MAX_TURNS)
-    answer_parts, thinking_len, tools = [], 0, []
+    answer_parts, thinking_len, tools, tool_outputs = [], 0, [], []
     pending_calls = {}
     for ev in stream.events:
         t = ev.get("type")
@@ -228,12 +418,13 @@ def _run_chat(client, messages, doc_ids, instructions, emit):
             emit({"type": "tool_call", "name": ev["name"],
                   "arguments": _clip(ev.get("arguments"))})
         elif t == "tool_result":
+            tool_outputs.append(ev.get("output"))
             emit({"type": "tool_result", "name": ev.get("name", ""),
                   "output": _clip(ev.get("output"))})
         elif t == "answer":
             answer_parts.append(ev.get("delta", ""))
             emit({"type": "answer", "delta": ev.get("delta", "")})
-    return "".join(answer_parts), thinking_len, tools
+    return "".join(answer_parts), thinking_len, tools, tool_outputs
 
 
 def _clip(v, n=400):

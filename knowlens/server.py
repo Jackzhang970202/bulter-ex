@@ -613,6 +613,9 @@ async def qa_stream(req: Request):
     session_id = b.get("session_id") or db.new_id("ss-")
     library_ids = b.get("library_ids") or []
     tag_ids = b.get("tag_ids") or []
+    doc_ids = b.get("doc_ids") or []
+    focus = b.get("focus") or None
+    panel = bool(b.get("panel"))
     adhoc_ids = b.get("adhoc_ids") or []
     ref_libs = b.get("ref_library_ids") or []
 
@@ -622,7 +625,9 @@ async def qa_stream(req: Request):
              "created_at,updated_at) VALUES(?,?,?,?,?,?,?,?)",
              (session_id, space_id, mode, question[:30], "[]",
               json.dumps({"library_ids": library_ids, "tag_ids": tag_ids,
-                          "adhoc_ids": adhoc_ids}, ensure_ascii=False),
+                          "doc_ids": doc_ids, "focus": focus,
+                          "panel": panel, "adhoc_ids": adhoc_ids},
+                         ensure_ascii=False),
               db.now(), db.now()))
         history = []
     else:
@@ -634,11 +639,18 @@ async def qa_stream(req: Request):
         history = list(reversed(history))
         if mode == "kb":
             old_libs = set(scope.get("library_ids") or [])
-            if old_libs and set(library_ids) != old_libs:
-                history = []   # retrieval scope changed → reset context (notify the frontend)
+            old_docs = set(scope.get("doc_ids") or [])
+            old_focus = (scope.get("focus") or {}).get("document_id")
+            new_focus = (focus or {}).get("document_id")
+            if ((old_libs and set(library_ids) != old_libs)
+                    or set(doc_ids) != old_docs
+                    or old_focus != new_focus):
+                history = []   # retrieval scope changed → reset context
         db.x("UPDATE sessions SET scope=?, updated_at=? WHERE id=?",
              (json.dumps({"library_ids": library_ids, "tag_ids": tag_ids,
-                          "adhoc_ids": adhoc_ids}, ensure_ascii=False),
+                          "doc_ids": doc_ids, "focus": focus,
+                          "panel": panel, "adhoc_ids": adhoc_ids},
+                         ensure_ascii=False),
               db.now(), session_id))
 
     mid = db.new_id("ms-")
@@ -706,7 +718,8 @@ async def qa_stream(req: Request):
                     res = qa.answer(space_id_for_chat, question,
                                     library_ids=library_ids, tag_ids=tag_ids,
                                     mode="kb", history=history, digest=digest,
-                                    on_event=on_ev)
+                                    on_event=on_ev, doc_ids=doc_ids,
+                                    focus=focus)
                 result_box.update(res or {})
             except Exception as e:
                 import traceback
@@ -733,16 +746,21 @@ async def qa_stream(req: Request):
             answer_text = "（回答失败：" + err_box.get("error", "") + "）"
             verdict = "未覆盖"
             citations = []
+            provenance = []
         else:
             answer_text = result_box.get("answer", "")
             verdict = result_box.get("verdict", "")
             citations = result_box.get("citations", [])
+            provenance = result_box.get("provenance", [])
         ev_id = db.new_id("qa-")
         db.x("INSERT INTO qa_events(id,session_id,space_id,question,answer,"
-             "verdict,citations,created_at) VALUES(?,?,?,?,?,?,?,?)",
+             "verdict,citations,provenance,created_at) "
+             "VALUES(?,?,?,?,?,?,?,?,?)",
              (ev_id, session_id, space_id, question, answer_text[:8000],
-              verdict, json.dumps(citations, ensure_ascii=False), db.now()))
+              verdict, json.dumps(citations, ensure_ascii=False),
+              json.dumps(provenance, ensure_ascii=False), db.now()))
         meta = {"citations": citations, "verdict": verdict,
+                "provenance": provenance,
                 "qa_event": ev_id,
                 "route": next((e for e in events_collected
                                if e["type"] == "route"), None),
