@@ -28,10 +28,10 @@ INCLUDE_FILES = [
     ".gitignore", ".gitattributes", "Dockerfile", "docker-compose.yml",
 ]
 INCLUDE_DIRS = ["knowlens", "web", "vendor", "scripts", "tests", "docs",
-                ".github"]
+                "catalog", "design", ".github"]
 IGNORE_DIRS = {"__pycache__", ".pytest_cache", ".git", "data", "_probe",
                "_archive", "dist", ".idea", ".vscode"}
-SECRET_RE = re.compile(r"(sk-[A-Za-z0-9\-_.]{20,}|tp-[a-z0-9]{20,})")
+SECRET_RE = re.compile(r"(?<![A-Za-z0-9])(?:sk-[A-Za-z0-9\-_.]{20,}|tp-[a-z0-9]{20,})")
 
 
 def ignore(dirpath, names):

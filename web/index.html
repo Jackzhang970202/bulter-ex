@@ -8,6 +8,9 @@
 <link rel="stylesheet" href="/static/style.css">
 <link rel="stylesheet" href="/static/style_v2.css">
 <link rel="stylesheet" href="/static/theme.css">
+<link rel="stylesheet" href="/static/platform.css?v=20261028b">
+<link rel="stylesheet" href="/static/quiet.css?v=20261028b">
+<link rel="stylesheet" href="/static/kb.css?v=20261028b">
 </head>
 <body>
   <aside id="sidebar">
@@ -19,12 +22,31 @@
     <button class="btn primary w100" id="btn-new-chat">✚ 新对话</button>
     <button class="btn w100" id="btn-new-space" style="margin-top:6px">＋ 新建空间</button>
     <nav id="nav">
+      <div class="nav-group">知识</div>
       <button class="nav-item" data-view="dashboard">
         <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/></svg></span>驾驶舱</button>
-      <button class="nav-item" data-view="kb">
-        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5.5A2.5 2.5 0 0 1 6.5 3H20v15H6.5A2.5 2.5 0 0 0 4 20.5V5.5Z"/><path d="M4 5.5v15M8 7h8M8 10.5h6"/></svg></span>知识空间</button>
+      <button class="nav-item" data-view="kb2">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 5a2 2 0 0 1 2-2h5v18H6a2 2 0 0 1-2-2V5Z"/><path d="M13 3h5a2 2 0 0 1 2 2v14a2 2 0 0 1-2 2h-5"/><path d="M6 7h3M6 10h3M15 7h3M15 10h3"/></svg></span>知识库</button>
       <button class="nav-item" data-view="chat">
         <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M21 11.5a8.4 8.4 0 0 1-9 8.4 9.6 9.6 0 0 1-3.5-.7L3 21l1.8-4.6A8.4 8.4 0 1 1 21 11.5Z"/><path d="M8.5 10.5h7M8.5 14h4.5"/></svg></span>智能问答</button>
+      <div class="nav-group">构建</div>
+      <button class="nav-item" data-view="agents">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="4" y="7" width="16" height="12" rx="3"/><path d="M9 3v4M15 3v4M9 13h.01M15 13h.01"/></svg></span>智能体</button>
+      <button class="nav-item" data-view="skills">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3l2.2 4.8L19 10l-4.8 2.2L12 17l-2.2-4.8L5 10l4.8-2.2L12 3Z"/><path d="M18 16l1 2 2 1-2 1-1 2-1-2-2-1 2-1 1-2Z"/></svg></span>技能市场</button>
+      <button class="nav-item" data-view="experts">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="8" r="3.5"/><path d="M4.5 20a7.5 7.5 0 0 1 15 0"/><path d="M17 3l1.2 2.3L20.5 6l-2.3 1.2L17 9.5l-1.2-2.3L13.5 6l2.3-.7L17 3Z"/></svg></span>专家广场</button>
+      <button class="nav-item" data-view="teams">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="8" cy="9" r="3"/><circle cx="16" cy="9" r="3"/><path d="M2.5 20a5.5 5.5 0 0 1 11 0M10.5 20a5.5 5.5 0 0 1 11 0"/></svg></span>团队协作</button>
+      <button class="nav-item" data-view="workflows">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="3" width="6" height="5" rx="1.5"/><rect x="15" y="16" width="6" height="5" rx="1.5"/><path d="M9 5.5h4a2 2 0 0 1 2 2v8.5M6 8v8a2 2 0 0 0 2 2h7"/></svg></span>工作流</button>
+      <div class="nav-group">运营</div>
+      <button class="nav-item" data-view="automation">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><circle cx="12" cy="12" r="8.5"/><path d="M12 7v5l3.5 2"/></svg></span>自动化</button>
+      <button class="nav-item" data-view="ops">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M4 19V9M10 19V5M16 19v-7M22 19H2"/></svg></span>运营后台</button>
+      <button class="nav-item" data-view="models">
+        <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><rect x="3" y="4" width="18" height="7" rx="2"/><rect x="3" y="13" width="18" height="7" rx="2"/><path d="M7 7.5h.01M7 16.5h.01"/></svg></span>模型配置</button>
       <button class="nav-item" data-view="evolve">
         <span class="ic"><svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8"><path d="M12 3v4M12 17v4M3 12h4M17 12h4M5.6 5.6l2.8 2.8M15.6 15.6l2.8 2.8M18.4 5.6l-2.8 2.8M8.4 15.6l-2.8 2.8"/><circle cx="12" cy="12" r="3.2"/></svg></span>经验中心</button>
       <button class="nav-item" data-view="settings">
@@ -36,7 +58,7 @@
       <span class="dot" id="model-dot"></span>
       <span id="model-info">检测模型通道…</span>
       <span style="flex:1"></span>
-      <span id="app-version">v0.1.0</span>
+      <span id="app-version">v0.3.0</span>
     </div>
   </aside>
 
@@ -50,6 +72,12 @@
       <div id="topbar-actions"></div>
       <div class="tb-status"><span class="dot" id="space-dot"></span><span id="space-status">数据就绪</span></div>
       <div class="clock" id="clock">--:--:--<small>加载中</small></div>
+      <button class="btn ghost sm" id="btn-side" title="收起/展开侧栏">
+        <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+          <rect x="3" y="4" width="18" height="16" rx="2" stroke="currentColor" stroke-width="1.7"/>
+          <path d="M9 4v16" stroke="currentColor" stroke-width="1.7"/></svg>
+      </button>
+      <button class="btn ghost sm" id="btn-guide" title="使用指南">?</button>
       <button class="btn ghost sm" id="btn-refresh" title="刷新当前页">⟳</button>
       <button class="btn ghost sm" id="btn-theme" title="切换深浅色">◐</button>
     </div>
@@ -107,6 +135,8 @@
 
   <script src="/static/vendor/marked.min.js"></script>
   <script src="/static/vendor/echarts.min.js"></script>
-  <script src="/static/app.js"></script>
+  <script src="/static/app.js?v=20261028b"></script>
+<script src="/static/i18n.js?v=20261028b"></script>
+<script src="/static/platform.js?v=20261028b"></script>
 </body>
 </html>

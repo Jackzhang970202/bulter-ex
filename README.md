@@ -2,13 +2,13 @@
 
 **Answers with evidence. Knowledge that evolves.**
 
-KnowLens is a department-level knowledge Q&A and experience-evolution agent. It turns documents, images, and meeting recordings into searchable, citable, verifiable knowledge, and improves itself through a human-reviewed loop: **candidate → review → rule / profile → release**. It ships with a knowledge cockpit and optional Claude Code experience integration.
+KnowLens is a department-level knowledge Q&A and experience-evolution agent. It turns documents, images, and meeting recordings into searchable, citable, verifiable knowledge, and improves itself through a human-reviewed loop: **candidate → review → rule / profile → release**. It ships with **193 catalogued capabilities**, a knowledge cockpit, an agent platform (agents, 1,137 installable open-source skills, experts, teams, workflows, automation) and optional Claude Code experience integration.
 
 English | [简体中文](README.zh-CN.md)
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![Version](https://img.shields.io/badge/version-0.1.0-green.svg)
+![Version](https://img.shields.io/badge/version-0.3.0-green.svg)
 
 ## Screenshots
 
@@ -29,6 +29,7 @@ English | [简体中文](README.zh-CN.md)
 | Verifiable citations | Citations point to document pages and can expand to the original text; invalid citations are removed. |
 | Two chat surfaces | Knowledge-base chat and temporary-material chat, plus a mini Q&A dock on each library page. |
 | In-space traceable assistant | Ask about the current library or document, or select any text/number to ask where it came from. Provenance cards show the source document/page/table/figure, formulas and inputs, and jump back to highlighted source text. |
+| URL ingestion | Paste a public page URL, preview the extracted Markdown, tag it, and index it into a library. |
 | Multimodal ingestion | PDF (text / scanned / mixed), Word, PPT, Excel, Markdown, images, and audio recordings. |
 | Image understanding | Each image is transcribed and semantically described, then inserted into the document in reading order and made searchable. |
 | Audio pipeline | ffmpeg normalization → ASR → timestamped transcript → structured meeting minutes (agenda / decisions / actions / terms). |
@@ -36,25 +37,59 @@ English | [简体中文](README.zh-CN.md)
 | Cockpit | Knowledge health, answer verdicts, ingestion trends, library health, risks, and model usage. |
 | Claude Code integration (optional) | Import development sessions as experience candidates and inject the release digest into a project's SessionStart hook. Disabled by default. |
 
+
+## Agent platform (0.3.0)
+
+The knowledge core is also an agent platform: agents, skills, experts, teams,
+workflows and automation live in the same process, database and interface.
+
+| Capability | Description |
+|---|---|
+| Agents | Author persona, model, temperature, step budget, knowledge scope, skills and tool permissions; publish with version snapshots and roll back. |
+| Unified workspace | One composer for knowledge, agents, experts, teams, workflows and Excel Q&A; attachments, structured run forms and traces in one view. |
+| AI creation | Describe a goal; the platform drafts a validated workflow, agent or team with clarifying questions; nothing is published automatically. |
+| Share & artifacts | Read-only conversation links, standalone artifact pages, and agent version diffs. |
+| External runtime | Optional zdata-agent-starter sidecar: discovers its agents/teams/workflows and runs them through the same chat (`ZDATA_BASE_URL`). |
+| Excel 问数 | Upload xlsx/xls/csv, profile sheets/columns, ask in natural language; generated pandas runs in an AST-checked subprocess; answers include result tables and optional charts. |
+| Skill marketplace | **1,137 open-source skills** harvested from four MIT/upstream repositories (metadata-only catalog); install on demand, search by category/licence, import from URL, author prompt/HTTP/script/MCP skills, and bundle them into first-class skill packs. |
+| Experts | Publish an agent as a discoverable expert with expertise tags, rating and usage count; chat from the expert profile. |
+| Teams | Round-table, supervisor-routed and handoff strategies over multiple agents, with a synthesizer and bounded turns. |
+| Workflows | Typed DAGs (LLM / agent / skill / tool / knowledge / condition / parallel / approval / delay), JSON editor, live DAG preview, run trace and approval resume. |
+| MCP registry | Browse the official MCP server registry, discover tools, and install a remote server as an executable skill. |
+| Tools | Allow-listed registry: knowledge search, calculator, JSON query, time, HTTP (SSRF-guarded), file read, web search. Every call is recorded, including depth-limited agent-to-agent delegation. |
+| Memory and evolution | Session history, user/agent/space/global memory, candidate extraction from corrections and failed runs, human approval, and injection into prompts. |
+| Evaluation | Per-agent evaluation sets with keyword checks and version-tied scores. |
+| Automation | Five-field cron schedules for agents and workflows, run-now, next-run calculation and run history. |
+| Operations | Header-based users with admin/editor/viewer roles, publication review, append-only audit log, artifacts and usage overview. |
+| Command palette | `Ctrl/Cmd+K` searches documents, agents, skills, experts, teams, workflows, sessions and memories. |
+| Bilingual UI | All interface strings live in `web/i18n.js`; toggle Chinese/English in Settings without rebuilding. |
+
+The platform layer is additive: existing routes and tables are untouched, and
+`KNOWLENS_PLATFORM=0` restores the pure 0.2.0 behaviour.
+
 ## Architecture
 
 ```
-Browser (vanilla JS + ECharts)
+Browser (vanilla JS + ECharts, no build step)
    │ REST / SSE
-FastAPI service
-   ├─ Q&A pipeline: routing → PageIndex tool loop → citation verification
+FastAPI service (one process, one port)
+   ├─ Knowledge: Q&A routing → PageIndex tool loop → citation verification
    ├─ Ingestion: PDF / Office / images / audio → hierarchical tree → index
    ├─ Experience: candidates → review → rules / profiles → digest → injection
-   └─ Storage: SQLite (WAL) + files (index, originals, OCR cache)
+   ├─ Platform: agents / skills / experts / teams / workflows / tools / memory
+   └─ Storage: SQLite (WAL) + files (index, originals, OCR cache, artifacts)
 ```
 
 ```
 knowlens/            Backend package (FastAPI, Q&A, ingestion, evolution, vision, audio)
-web/                 Frontend (index.html / app.js / theme and component styles / vendor)
+knowlens/platform/   Agent platform (agents, skills, runtime, tools, workflows, ops)
+catalog/             Harvested open-source skill catalog (1,137 entries, metadata only)
+web/                 Frontend (index.html / app.js / platform.js / styles / vendor)
 vendor/pageindex/    Embedded PageIndex retrieval engine (MIT)
-scripts/             Startup, digest injection, release build
-tests/               Model-free core tests
-docs/                Architecture, release guide, screenshots
+scripts/             Startup, skill harvester, digest injection, release build
+design/              Five-round design record and feature catalog
+tests/               Model-free unit and API tests
+docs/                Architecture, release guide, user guide, operations runbook, screenshots
 data/                Runtime data (gitignored)
 ```
 
@@ -157,13 +192,24 @@ PDF parsing uses **pdfplumber + pypdfium2** by default (permissive licenses). If
 | GET/POST | `/api/candidates/...` | Candidate review and evidence |
 | GET/POST | `/api/spaces/{id}/digest` | Release digest |
 | GET/POST | `/api/spaces/{id}/cc/...` | Claude Code capture and injection |
+| GET/POST | `/api/platform/agents` | Agent CRUD, publish, versions, run (SSE) |
+| GET | `/api/platform/skills/catalog` | Search the 1,137-skill open catalog |
+| POST | `/api/platform/skills/install` | Install a catalog skill |
+| GET/POST | `/api/platform/experts`, `/teams` | Experts and teams, run (SSE) |
+| GET/POST | `/api/platform/workflows` | Typed DAGs, validate, run (SSE) |
+| GET | `/api/platform/runs/{id}` | Run trace, steps and artifacts |
+| GET/POST | `/api/platform/schedules` | Cron automation |
+| GET | `/api/platform/search?q=` | Cross-kind search for the command palette |
+| GET | `/api/platform/overview` | Platform metrics and 14-day trend |
 
 ## Development and tests
 
 ```bash
 python -m compileall -q knowlens scripts tests
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -v     # 58 tests: core, platform API, units
 node --check web/app.js
+node --check web/platform.js
+node --check web/i18n.js
 ```
 
 CI runs these checks on GitHub Actions without calling a real model.
@@ -179,9 +225,16 @@ CI runs these checks on GitHub Actions without calling a real model.
 
 - Hybrid lexical / vector recall for very large libraries
 - Space export and import
-- Multi-user support and authentication
+- Vector recall for the skill marketplace
 - Human correction of image-understanding results written back to the index
 - More cockpit metrics and alerts
+- Deferred: SSO/JWT, PostgreSQL, Milvus, drag-and-drop workflow canvas
+
+Release notes: [`docs/release-notes-0.3.0.md`](docs/release-notes-0.3.0.md).
+
+User guide (Chinese): [`docs/user-guide.zh-CN.md`](docs/user-guide.zh-CN.md) — task-oriented walkthrough of every workspace.
+
+Operations runbook: [`docs/platform-operations.md`](docs/platform-operations.md) — start/stop, model channels, backup, RBAC, skills, MCP, scheduling, troubleshooting.
 
 ## License and third parties
 

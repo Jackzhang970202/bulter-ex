@@ -40,13 +40,21 @@ function toast(msg, cls = "") {
   setTimeout(() => t.remove(), 4200);
 }
 
+let _modalTrigger = null;
 function openModal(title, bodyHTML, footHTML) {
+  _modalTrigger = document.activeElement;
   $("#modal-title").textContent = title;
   $("#modal-body").innerHTML = bodyHTML;
   $("#modal-foot").innerHTML = footHTML || "";
   $("#modal-back").classList.add("show");
 }
-function closeModal() { $("#modal-back").classList.remove("show"); }
+function closeModal() {
+  $("#modal-back").classList.remove("show");
+  if (_modalTrigger && _modalTrigger.focus) {
+    try { _modalTrigger.focus(); } catch (e) {}
+  }
+  _modalTrigger = null;
+}
 $("#modal-back").addEventListener("click", e => { if (e.target.id === "modal-back") closeModal(); });
 
 function md2html(text) {
@@ -225,7 +233,9 @@ async function boot() {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
     localStorage.setItem("dkb-theme", next);
+    // Re-render the active view so charts and computed colors follow the theme.
     if (state.view === "settings") renderSettings();
+    else if (state.view !== "chat" && state.view !== "kb") switchView(state.view);
   };
   $$("#nav .nav-item").forEach(b => b.onclick = () => switchView(b.dataset.view));
   $("#btn-refresh").onclick = () => refreshAll();
@@ -245,6 +255,7 @@ async function boot() {
   $("#drawer-mask").onclick = closeDrawer;
   $("#dw-close").onclick = closeDrawer;
   initDrawerResizer();
+  if (window.KP) KP.init();
   initMiniChat();
   initSelectionToolbar();
   try {
@@ -288,7 +299,17 @@ async function doNewSpace() {
 const VIEW_META = {
   dashboard: { title: "驾驶舱", sub: "空间总览与知识健康" },
   kb: { title: "知识空间", sub: "空间、库与文档" },
+  kb2: { title: "知识库", sub: "解析、分块、检索与治理" },
+  models: { title: "模型配置", sub: "LLM / 嵌入 / 重排 / 视觉 / 语音" },
   chat: { title: "智能问答", sub: "基于资料回答，逐句带出处" },
+  agents: { title: "智能体", sub: "可配置、可测试、可发布的智能体" },
+  skills: { title: "技能市场", sub: "1100+ 开源技能与自定义技能" },
+  experts: { title: "专家广场", sub: "把智能体包装成可咨询的专家" },
+  teams: { title: "团队协作", sub: "多智能体圆桌、调度与交接" },
+  workflows: { title: "工作流", sub: "可视化编排、审批与运行追踪" },
+  automation: { title: "自动化", sub: "定时任务与运行产物" },
+  designer: { title: "AI 创建", sub: "和 AI 对话，实时看到草稿变化" },
+  ops: { title: "运营后台", sub: "概览、审核、审计与权限" },
   evolve: { title: "经验中心", sub: "候选、规则与发行版" },
   settings: { title: "设置", sub: "模型、存储与外观" },
 };
@@ -310,6 +331,7 @@ function switchView(v) {
   if (v === "chat") renderChat();
   if (v === "evolve") renderEvolve();
   if (v === "settings") renderSettings();
+  if (window.KP && KP.VIEWS.includes(v)) KP.render(v);
   loadHistory();
 }
 
@@ -672,6 +694,15 @@ async function renderSettings() {
         <span class="v">停止服务后备份整个数据目录即可</span></div>
     </div>
     <div class="dash-card reveal">
+      <div class="dc-head"><h3>语言 / Language</h3></div>
+      <div class="setting-row"><span class="k">界面语言</span><span class="v">
+        <button class="btn sm ${window.I18N && I18N.current() === "zh" ? "primary" : ""}"
+          onclick="I18N.set('zh')">中文</button>
+        <button class="btn sm ${window.I18N && I18N.current() === "en" ? "primary" : ""}"
+          onclick="I18N.set('en')">English</button></span></div>
+      <div class="help" style="margin-top:8px">界面文案集中维护在 web/i18n.js；文档、智能体提示词等业务内容保持原文。</div>
+    </div>
+    <div class="dash-card reveal">
       <div class="dc-head"><h3>外观</h3></div>
       <div class="setting-row"><span class="k">主题</span><span class="v">
         <button class="btn sm ${theme === "light" ? "primary" : ""}" onclick="setTheme('light')">浅色玻璃</button>
@@ -722,7 +753,8 @@ async function renderKB() {
   }
   if (!state.lib) {
     $("#topbar-actions").innerHTML =
-      `<button class="btn primary" onclick="newLibDialog()">＋ 新建库</button>`;
+      `<button class="btn ghost" onclick="switchView('kb2')" title="统一知识库：解析、分块、检索与治理">知识库</button>
+       <button class="btn primary" onclick="newLibDialog()">＋ 新建库</button>`;
     v.innerHTML = `<div class="grid" id="lib-grid"></div>`;
     $("#lib-grid").innerHTML = state.libs.map(l => `
       <div class="card clickable" onclick="openLib('${l.id}')">
@@ -752,6 +784,7 @@ async function renderLibDetail() {
   $("#topbar-actions").innerHTML = `
     <button class="btn" onclick="state.lib=null;renderKB()">← 返回库列表</button>
     <button class="btn" onclick="delLib('${lib.id}')" style="color:var(--error)">删除库</button>
+    <button class="btn" onclick="urlIngestDialog()">🔗 链接入库</button>
     <button class="btn primary" onclick="uploadDialog('${lib.id}')">⬆ 上传文件</button>`;
   $("#kb-fab").classList.add("show");
   $("#kb-fab").title = `直接问答「${lib.name}」`;
@@ -763,12 +796,14 @@ async function renderLibDetail() {
     </div>
     ${lib.summary ? `<div class="help mb8">库摘要（随上传自动演进）：${esc(lib.summary)}</div>` : ""}
     <div id="index-banner"></div>
+    <div id="bulk-bar"></div>
     <div id="doc-rows"></div>`;
   drawDocTable();
   pollProgress();
 }
 
 function drawDocTable() {
+  state._bulkSel = state._bulkSel || new Set();
   const rows = state.docs.map(d => {
     let st;
     if (d.status === "ready") st = `<span class="badge ok">就绪 ${d.pages}页</span>`;
@@ -786,19 +821,128 @@ function drawDocTable() {
       `<button class="btn sm ghost" style="color:var(--error)" onclick="delDoc('${d.id}','${esc(d.name)}')">删除</button>`,
     ].join("");
     const clickable = d.status === "ready";
+    state._bulkSel = state._bulkSel || new Set();
+    const checked = state._bulkSel.has(d.id) ? "checked" : "";
     return `<tr style="${clickable ? "cursor:pointer" : ""}"
       ${clickable ? `onclick="openDocDrawer('${d.id}')"` : ""}>
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="doc-sel"
+        data-id="${d.id}" ${checked} onclick="toggleDocSel('${d.id}',this)"></td>
       <td>${KIND_ICON[d.kind] || "📎"} ${esc(d.name)}</td>
       <td>${esc(d.kind)}</td><td>${st}</td><td>${tags}</td>
       <td class="right" onclick="event.stopPropagation()">${acts}</td></tr>`;
   }).join("");
   $("#doc-rows").innerHTML = state.docs.length ? `
     <table class="doc-table"><thead><tr>
-      <th style="width:34%">文件</th><th>类型</th><th>状态</th><th>标签</th>
+      <th style="width:28px"><input type="checkbox" id="doc-sel-all" title="全选"
+        onclick="toggleAllDocs(this)"></th>
+      <th style="width:32%">文件</th><th>类型</th><th>状态</th><th>标签</th>
       <th class="right">操作</th></tr></thead><tbody>${rows}</tbody></table>
       <div class="help mt8">点击文件行查看内容（结构树 / 逐页浏览）；右下角 💬 直接对本库提问。</div>`
     : `<div class="empty"><div class="big">📭</div>库内暂无文件，点右上角「上传文件」或直接把文件/文件夹拖进来</div>`;
+  const ids = new Set((state.docs || []).map(d => d.id));
+  (state._bulkSel || new Set()).forEach(id => {
+    if (!ids.has(id)) state._bulkSel.delete(id);
+  });
+  drawBulkBar();
   drawIndexBanner();
+}
+
+function toggleDocSel(id, box) {
+  state._bulkSel = state._bulkSel || new Set();
+  if (box.checked) state._bulkSel.add(id); else state._bulkSel.delete(id);
+  drawBulkBar();
+}
+
+function toggleAllDocs(box) {
+  state._bulkSel = new Set(box.checked ? (state.docs || []).map(d => d.id) : []);
+  drawDocTable();
+}
+
+function drawBulkBar() {
+  const bar = $("#bulk-bar");
+  if (!bar) return;
+  const n = (state._bulkSel || new Set()).size;
+  bar.innerHTML = n ? `<div class="help" style="display:flex;align-items:center;gap:10px">
+    <b>已选 ${n} 项</b>
+    <button class="btn sm primary" onclick="bulkTagDialog()">批量标签</button>
+    <button class="btn sm ghost" onclick="state._bulkSel.clear();drawDocTable()">清除选择</button>
+  </div>` : "";
+}
+
+function bulkTagDialog() {
+  const names = (state.tags || []).map(t => t.name);
+  const boxes = (cls) => names.map(t =>
+    `<label style="display:inline-flex;gap:5px;align-items:center;margin:3px 8px 3px 0">
+      <input type="checkbox" class="${cls}" value="${esc(t)}"> ${esc(t)}
+    </label>`).join("");
+  openModal("批量标签", `
+    <div class="help mb8">已选 ${state._bulkSel.size} 篇文档。勾选要添加或移除的标签。</div>
+    <div class="mb8"><b style="font-size:12.5px">添加标签</b><div>${boxes("bt-add") || "暂无已有标签"}</div></div>
+    <div class="mb8"><b style="font-size:12.5px">移除标签</b><div>${boxes("bt-remove") || "暂无已有标签"}</div></div>
+    <label style="display:block;font-size:12.5px">新标签（逗号分隔）
+      <input id="bt-new" class="w100" placeholder="例如：制度, 流程"></label>`,
+    `<button class="btn" onclick="closeModal()">取消</button>
+     <button class="btn primary" onclick="applyBulkTags()">应用</button>`);
+}
+
+async function applyBulkTags() {
+  const add = Array.from(document.querySelectorAll(".bt-add:checked")).map(n => n.value);
+  const remove = Array.from(document.querySelectorAll(".bt-remove:checked")).map(n => n.value);
+  const extra = ($("#bt-new").value || "").split(/[,，;；\s]+/).map(x => x.trim()).filter(Boolean);
+  if (!add.length && !remove.length && !extra.length) return toast("至少选择一个标签", "err");
+  try {
+    const r = await jpost("/api/platform/documents/bulk_tags", {
+      document_ids: Array.from(state._bulkSel),
+      add: add.concat(extra), remove,
+    });
+    toast(`已更新 ${r.documents} 篇：新增 ${r.added}，移除 ${r.removed}`, "ok");
+    closeModal();
+    state._bulkSel.clear();
+    state.docs = await api(`/api/libraries/${state.lib}/documents`);
+    drawDocTable();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+
+function urlIngestDialog() {
+  openModal("网页链接入库", `
+    <div class="help mb8">抓取网页正文，转成 Markdown 后进入当前库的索引流程。仅支持公开页面。</div>
+    <label style="display:block;font-size:12.5px">页面链接
+      <input id="ui-url" class="w100" placeholder="https://example.com/article"></label>
+    <label style="display:block;font-size:12.5px;margin-top:8px">标签（逗号分隔，可选）
+      <input id="ui-tags" class="w100" placeholder="外部资料, 行业"></label>
+    <div style="margin-top:10px"><button class="btn sm" onclick="previewUrl()">预览正文</button></div>
+    <div id="ui-preview" class="help" style="margin-top:8px;max-height:240px;overflow:auto"></div>`,
+    `<button class="btn" onclick="closeModal()">取消</button>
+     <button class="btn primary" onclick="doUrlIngest()">入库</button>`);
+}
+
+async function previewUrl() {
+  const url = $("#ui-url").value.trim();
+  if (!url) return toast("请填写链接", "err");
+  const box = $("#ui-preview");
+  box.textContent = "抓取中…";
+  try {
+    const r = await jpost("/api/platform/ingest/preview", { url });
+    box.innerHTML = `<b>${esc(r.title)}</b> · ${r.chars} 字 · ${esc(r.url)}
+      <pre class="kp-pre" style="margin-top:6px;white-space:pre-wrap">${esc(r.markdown.slice(0, 3000))}</pre>`;
+  } catch (e) { box.textContent = "抓取失败：" + e.message; }
+}
+
+async function doUrlIngest() {
+  const url = $("#ui-url").value.trim();
+  const tags = ($("#ui-tags").value || "").split(/[,，;；\s]+/).filter(Boolean);
+  if (!url) return toast("请填写链接", "err");
+  try {
+    const r = await jpost("/api/platform/ingest/url", {
+      space_id: state.space, library_id: state.lib, url, tags,
+    });
+    toast(`已入库：${r.title}`, "ok");
+    closeModal();
+    state.docs = await api(`/api/libraries/${state.lib}/documents`);
+    drawDocTable();
+    pollProgress();
+  } catch (e) { toast(e.message, "err"); }
 }
 
 function drawIndexBanner() {
@@ -1296,24 +1440,32 @@ function renderChat() {
   v.innerHTML = `
     <div id="chat-wrap">
       <div id="chat-main">
+        <div id="kp-target-bar" style="display:none"></div>
         <div id="msgs"></div>
         <div id="composer">
           <div class="input-card" id="input-card">
+            <div class="kp-composer-top">
+              <button class="kp-inline-target" id="kp-inline-target"
+                onclick="KP.openTargetHub()" title="切换目标"></button>
+              <span class="kp-subs" id="kp-kb-subs"></span>
+            </div>
             <div class="attach-preview" id="attach-list"></div>
             <div class="scope-preview" id="scope-chips"></div>
             <textarea id="q-input" rows="2" placeholder="输入问题，Enter 发送，Shift+Enter 换行"></textarea>
-            <div class="control-bar">
-              <div class="seg" id="mode-seg">
-                <button data-m="kb">库内问答</button>
-                <button data-m="adhoc">临时问答</button>
-              </div>
-              <button class="cb-btn" id="btn-libpick">📚 选库 <span id="lib-n">0</span></button>
-              <button class="cb-btn" id="btn-attach" title="附加临时文件（不入知识库）">📎 附加文件</button>
-              <button class="cb-btn" id="btn-reflib" title="临时问答时同时参考空间已入库文档">🗂 参考库</button>
-              <span class="spacer"></span>
-              <button class="send-round" id="btn-send" title="发送 (Ctrl+Enter)">
+            <div class="control-bar kp-kb-bar">
+              <button class="kp-plus-btn" id="kp-kb-plus"
+                onclick="KP.openKbPlusMenu()" title="添加文件 / 链接 / 范围 / 模式">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-                  <path d="M4 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round"/></svg></button>
+              <button class="kp-scope-btn" id="kp-kb-scope"
+                onclick="toggleLibPop()" title="选择检索范围">
+                范围 <b id="kb-scope-summary">全部库</b></button>
+              <span class="spacer"></span>
+              <button class="send-round" id="btn-send" title="发送">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor"
+                    stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
             </div>
             <div id="lib-pop"></div>
@@ -1324,9 +1476,10 @@ function renderChat() {
     </div>`;
   $("#btn-send").onclick = sendQuestion;
   $("#btn-send").disabled = state.running;
-  $("#btn-attach").onclick = () => $("#adhoc-input").click();
-  $("#btn-libpick").onclick = toggleLibPop;
-  $("#btn-reflib").onclick = () => { state.refLibs = !state.refLibs; syncCard(); };
+  const attachBtn = $("#btn-attach");
+  if (attachBtn) attachBtn.onclick = () => $("#adhoc-input").click();
+  const libBtn = $("#btn-libpick");
+  if (libBtn) libBtn.onclick = toggleLibPop;
   $("#q-input").addEventListener("keydown", e => {
     if (e.key !== "Enter" || e.shiftKey) return;   // Shift+Enter 换行
     if (e.isComposing || e.keyCode === 229) return; // 输入法选词中不发送
@@ -1346,6 +1499,9 @@ function renderChat() {
   ensureScrollGuard($("#msgs"));
   if (!state.sessionId) { welcomeScreen(); maybeRestoreLive(); }
   else reloadSession().then(() => maybeRestoreLive());
+  const main = $("#chat-main");
+  if (main) main.classList.toggle("home", !state.sessionId);
+  if (window.KP) KP.mountChatTargets();
 }
 
 function escLibPop(e) {
@@ -1381,14 +1537,8 @@ function drawLibPop() {
 }
 function syncCard() {
   const adhoc = state.chatMode === "adhoc";
-  $$("#mode-seg button").forEach(b => b.classList.toggle("on", b.dataset.m === state.chatMode));
-  $("#btn-attach").style.display = adhoc ? "" : "none";
-  $("#btn-reflib").style.display = adhoc ? "" : "none";
-  $("#btn-reflib").classList.toggle("on", state.refLibs);
-  $("#btn-libpick").style.display = adhoc ? "none" : "";
-  $("#btn-libpick").classList.toggle("on", !!state.scopeLibs.length);
-  $("#lib-n").textContent = state.scopeLibs.length;
-  $("#scope-chips").innerHTML = !adhoc ? state.scopeLibs.map(id => {
+  const scopeBox = $("#scope-chips");
+  if (scopeBox) scopeBox.innerHTML = !adhoc ? state.scopeLibs.map(id => {
     const l = state.libs.find(x => x.id === id);
     return l ? `<span class="att-chip"><span class="ic">📁</span><span class="nm">${esc(l.name)}</span>
       <span class="x" onclick="rmScopeLib('${id}')">✕</span></span>` : "";
@@ -1398,17 +1548,22 @@ function syncCard() {
       <span class="x" onclick="rmScopeTag('${tid}')">✕</span></span>` : "";
   }).join("") : "";
   drawAttachChips();
+  const summary = $("#kb-scope-summary");
+  if (summary) summary.textContent = adhoc ? "临时文件"
+    : (state.scopeLibs.length ? `${state.scopeLibs.length} 个库` : "全部库");
+  const scopeBtn = $("#kp-kb-scope");
+  if (scopeBtn) scopeBtn.classList.toggle("on",
+    !adhoc && (!!state.scopeLibs.length || !!state.scopeTags.length));
   const pend = state.scopeLibs.reduce((n, id) => {
     const l = state.libs.find(x => x.id === id);
     return n + ((l && l.pending_count) || 0);
   }, 0);
-  $("#composer-hint").textContent = adhoc
-    ? "附加文件仅本会话使用、不进入知识库；大文件自动建临时索引。"
-    : "回答只依据勾选库内检索到的资料，逐句带引用；答不了会明说缺什么材料。"
-      + (pend ? ` · 所选库还有 ${pend} 篇正在索引，暂不可检索（已就绪的可正常提问）。` : "");
-  $("#q-input").placeholder = adhoc
-    ? "针对附加文件提问…"
-    : (state.scopeLibs.length ? "提问，将检索上方选中的库…" : "先在左下「📚 选库」勾选检索范围，或直接提问由系统路由…");
+  const hint = $("#composer-hint");
+  if (hint) hint.textContent = adhoc
+    ? "临时文件仅本次使用，不进入知识库"
+    : (pend ? `所选库还有 ${pend} 篇正在索引` : "");
+  const input = $("#q-input");
+  if (input) input.placeholder = adhoc ? "针对文件提问…" : "问点什么…";
 }
 function rmScopeLib(id) { state.scopeLibs = state.scopeLibs.filter(x => x !== id); saveScope(); syncCard(); }
 function rmScopeTag(id) { state.scopeTags = state.scopeTags.filter(x => x !== id); saveScope(); syncCard(); }
@@ -1442,9 +1597,9 @@ function welcomeScreen() {
        "使用手册里有哪些导出方式？", "如果现有系统做不到 X，该怎么改进？"];
   $("#msgs").innerHTML = `
     <div class="welcome">
-      <div class="wl-top"><div class="wl-mark">鉴</div><h2>${adhoc ? "临时资料问答" : "知鉴问答"}</h2></div>
+      <div class="wl-top"><div class="wl-mark">鉴</div><h2>${adhoc ? "临时资料问答" : "今天想了解什么？"}</h2></div>
       <p>${adhoc ? "附加的文件只在本会话使用，不进入知识库；像和助手面对面看材料一样提问。"
-        : "答案基于你勾选的库与标签范围检索，逐句给出出处；查不到会明确说缺什么材料。"}</p>
+        : "从知识、智能体、团队、工作流或 Excel 问数开始；答案会带出处。"}</p>
       <div class="suggests">${hints.map((h, i) => `
         <div class="suggest-card" style="animation-delay:${i * 55}ms" onclick="fillQ('${esc(h)}')">${esc(h)}</div>`).join("")}</div>
     </div>`;
@@ -1746,6 +1901,7 @@ async function sendQuestion() {
   if (state.chatMode === "adhoc" && !state.adhocFiles.length && !state.refLibs)
     return toast("请先附加临时文件", "err");
   const wl = $("#msgs .welcome"); if (wl) wl.remove();
+  const cm = $("#chat-main"); if (cm) cm.classList.remove("home");
   state.running = true;
   $("#btn-send").disabled = true;
   msgShell("user", `<div class="row"><div class="bubble">${esc(q)}</div></div>`);
@@ -1763,6 +1919,8 @@ async function sendQuestion() {
     session_id: state.sessionId, library_ids: state.scopeLibs,
     tag_ids: state.scopeTags, adhoc_ids: state.adhocFiles.map(f => f.id),
     ref_library_ids: state.refLibs ? state.scopeLibs : [],
+    skill_ids: window.KP && KP.currentSkillIds ? KP.currentSkillIds() : [],
+    kb_ids: window.KP && KP.currentKBIds ? KP.currentKBIds() : [],
   };
   try {
     await sseStream("/api/qa/stream", reqBody, ev => {
@@ -1893,6 +2051,7 @@ function openSession(id, mode) {
 }
 async function reloadSession() {
   const s = await api(`/api/sessions/${state.sessionId}`);
+  $("#chat-main")?.classList.remove("home");
   $("#msgs").innerHTML = "";
   for (const m of s.messages) {
     if (m.role === "user") msgShell("user", `<div class="row"><div class="bubble">${esc(m.content)}</div></div>`);

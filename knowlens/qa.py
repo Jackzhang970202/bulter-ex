@@ -125,7 +125,7 @@ def route(space_id, question, docs, digest):
 def answer(space_id, question, library_ids=None, tag_ids=None,
            history=None, digest="", on_event=None, mode="kb",
            temp_context="", temp_doc_ids=None, temp_docs=None,
-           doc_ids=None, focus=None):
+           doc_ids=None, focus=None, extra_instructions=""):
     """Execute one complete Q&A turn. history contains the visible messages of the existing conversation.
 
     mode="kb": scope = selected libraries in the space (+ tag filter), using the five-stage pipeline.
@@ -136,7 +136,7 @@ def answer(space_id, question, library_ids=None, tag_ids=None,
     space = db.one("SELECT * FROM spaces WHERE id=?", (space_id,))
     if mode == "adhoc" and not temp_docs:
         return _answer_direct(space, question, history, temp_context,
-                              digest, emit)
+                              digest, emit, extra_instructions)
     docs = temp_docs if mode == "adhoc" else candidate_docs(
         space_id, library_ids, tag_ids, doc_ids)
     if not docs and not temp_context:
@@ -171,6 +171,9 @@ def answer(space_id, question, library_ids=None, tag_ids=None,
     sys_prompt = SYS_BASE.format(space_name=space["name"])
     if digest:
         sys_prompt += "\n\n部门认知（发行版，优先级低于用户当前问题中的明确指令）：\n" + digest
+    if extra_instructions:
+        sys_prompt += ("\n\n可用技能说明（仅作方法指导，不改变工具权限）：\n"
+                       + extra_instructions)
     if temp_context:
         sys_prompt += "\n\n本次会话临时资料：\n" + temp_context
     if focus:
@@ -513,12 +516,16 @@ ADHOC_DIRECT_SYS = (
 )
 
 
-def _answer_direct(space, question, history, temp_context, digest, emit):
+def _answer_direct(space, question, history, temp_context, digest, emit,
+                   extra_instructions=""):
     """adhoc small-file direct answer: the material is already inlined, so no retrieval tool loop is needed."""
     emit({"type": "stage", "stage": "synthesize",
           "detail": f"基于临时资料直接回答（{len(temp_context)} 字符）"})
     sys_txt = ADHOC_DIRECT_SYS.format(
         digest=("\n部门背景：" + digest[:1500]) if digest else "")
+    if extra_instructions:
+        sys_txt += ("\n\n可用技能说明（仅作方法指导）：\n"
+                    + extra_instructions)
     messages = [{"role": "system",
                  "content": sys_txt + "\n\n临时资料：\n" + temp_context}]
     messages += list(history or [])

@@ -1,0 +1,225 @@
+/* 知识库设置页与详情页补充样式（类名与 design/prototype 对齐） */
+
+.kp-kb-page .split {
+  display: grid;
+  grid-template-columns: 200px minmax(0, 1fr);
+  gap: 18px;
+  align-items: start;
+}
+
+.kp-kb-page .setnav {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 8px;
+  position: sticky;
+  top: 12px;
+}
+
+.kp-kb-page .setnav div {
+  padding: 8px 10px;
+  border-radius: 8px;
+  font-size: 12.5px;
+  color: var(--text-2);
+  cursor: pointer;
+}
+
+.kp-kb-page .setnav div:hover {
+  background: var(--bg-elev);
+  color: var(--text-1);
+}
+
+.kp-kb-page .form {
+  background: var(--bg-card);
+  border: 1px solid var(--border);
+  border-radius: 12px;
+  padding: 16px;
+}
+
+.kp-kb-page .form h3 {
+  margin: 0 0 6px;
+  font-size: 14px;
+}
+
+.kp-kb-page .form .hint {
+  color: var(--text-3);
+  font-size: 12px;
+  margin-bottom: 12px;
+}
+
+.kp-kb-page .field {
+  margin-bottom: 14px;
+}
+
+.kp-kb-page .field > label {
+  display: block;
+  font-size: 12.5px;
+  font-weight: 600;
+  margin-bottom: 5px;
+  color: var(--text-1);
+}
+
+.kp-kb-page .field .desc {
+  color: var(--text-3);
+  font-size: 11.5px;
+  margin-top: 4px;
+}
+
+.kp-kb-page .field input:not([type="checkbox"]),
+.kp-kb-page .field select,
+.kp-kb-page .field textarea {
+  width: 100%;
+  padding: 8px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font: inherit;
+  font-size: 12.5px;
+  background: var(--bg-card);
+  color: var(--text-1);
+}
+
+.kp-kb-page .field textarea {
+  min-height: 70px;
+  resize: vertical;
+}
+
+.kp-kb-page .row2 {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 12px;
+}
+
+.kp-kb-page .switch {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12.5px;
+  color: var(--text-1);
+}
+
+.kp-kb-page .switch i {
+  width: 34px;
+  height: 20px;
+  border-radius: 999px;
+  background: #d6dae1;
+  position: relative;
+  transition: 0.15s;
+  flex: none;
+}
+
+.kp-kb-page .switch i::after {
+  content: "";
+  position: absolute;
+  top: 2px;
+  left: 2px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: #fff;
+  transition: 0.15s;
+}
+
+.kp-kb-page .switch.on i {
+  background: var(--brand);
+}
+
+.kp-kb-page .switch.on i::after {
+  left: 16px;
+}
+
+@media (max-width: 900px) {
+  .kp-kb-page .split {
+    grid-template-columns: 1fr;
+  }
+  .kp-kb-page .setnav {
+    position: static;
+    display: flex;
+    flex-wrap: wrap;
+    gap: 4px;
+  }
+  .kp-kb-page .row2 {
+    grid-template-columns: 1fr;
+  }
+}
+
+/* 模型调试结果 */
+.kp-debug {
+  margin-top: 14px;
+}
+
+.kp-debug-banner {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 10px 12px;
+  border-radius: 9px;
+  font-size: 12.5px;
+  background: var(--bg-elev);
+  border: 1px solid var(--border);
+}
+
+.kp-debug-banner b {
+  font-size: 13px;
+}
+
+.kp-debug-banner span {
+  margin-left: auto;
+  color: var(--text-3);
+  font-variant-numeric: tabular-nums;
+}
+
+.kp-debug-banner.ok {
+  background: #e8f5ee;
+  border-color: #bfe3cf;
+  color: var(--ok);
+}
+
+.kp-debug-banner.err {
+  background: #fdecea;
+  border-color: #f3c2bd;
+  color: var(--err);
+}
+
+/* 上传确认与进度 */
+.kp-upload-files {
+  display: grid;
+  gap: 6px;
+  max-height: 160px;
+  overflow: auto;
+}
+
+.kp-upload-file {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 7px 10px;
+  border: 1px solid var(--border);
+  border-radius: 8px;
+  font-size: 12.5px;
+}
+
+.kp-upload-file .kp-doc-name {
+  flex: 1;
+  min-width: 0;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.kp-upload-progress {
+  margin-top: 12px;
+}
+
+.kp-upload-bar {
+  height: 6px;
+  border-radius: 999px;
+  background: var(--bg-elev);
+  overflow: hidden;
+}
+
+.kp-upload-bar i {
+  display: block;
+  height: 100%;
+  background: var(--brand);
+  transition: width 0.2s;
+}

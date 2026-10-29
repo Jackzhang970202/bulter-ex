@@ -25,3 +25,5 @@ jobs:
           node-version: "20"
       - name: Check frontend syntax
         run: node --check web/app.js
+          node --check web/platform.js
+          node --check web/i18n.js
