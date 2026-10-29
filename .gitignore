@@ -26,3 +26,11 @@ __pycache__/
 /.claude/
 /.venv/
 /venv/
+# Local scratch (never commit)
+/.tmp/
+docs/
+catalog/
+catalog.json
+tests/
+specs/
+design/

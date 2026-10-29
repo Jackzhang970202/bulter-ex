@@ -17,6 +17,11 @@ python-dotenv>=1.0
 pyyaml>=6.0
 Pillow>=9.0
 requests>=2.28
+# Excel / 问数
+pandas>=2.0
+openpyxl>=3.1
+xlrd>=2.0
+
 # Office 解析
 python-docx>=1.1
 python-pptx>=0.6
@@ -27,3 +32,15 @@ imageio-ffmpeg>=0.5
 
 # 可选加速：PyMuPDF 提供更快的 PDF 版面分析，但为 AGPL 许可，
 # 开源分发默认不安装。需要时自行 pip install pymupdf。
+# Test client on Python 3.10 (anyio dependency)
+exceptiongroup; python_version < "3.11"
+
+# 知识库移植：解析与切分（W1/W2）
+markitdown>=0.1.0
+ebooklib>=0.18
+beautifulsoup4>=4.12
+lxml>=5.0
+markdownify>=0.13
+trafilatura>=1.8
+# 表格摘要/数据分析（可选；未安装时表摘要功能自动跳过）
+# duckdb>=1.0

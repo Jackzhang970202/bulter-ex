@@ -1,0 +1,107 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>分享 · 知鉴 KnowLens</title>
+<style>
+  :root{--bg:#f7f8fa;--card:#fff;--border:#e4e7ec;--t1:#101828;--t2:#475467;--t3:#8a94a6;--brand:#2563eb}
+  *{box-sizing:border-box}
+  body{margin:0;background:var(--bg);color:var(--t1);
+    font:14px/1.75 "Microsoft YaHei","PingFang SC",system-ui,sans-serif}
+  .wrap{max-width:760px;margin:0 auto;padding:36px 20px 60px}
+  .brand{display:flex;align-items:center;gap:10px;margin-bottom:24px}
+  .mark{width:34px;height:34px;border-radius:9px;background:var(--brand);color:#fff;
+    display:grid;place-items:center;font-weight:700}
+  h1{font-size:24px;margin:0 0 6px;letter-spacing:-.02em}
+  .meta{color:var(--t3);font-size:12px;margin-bottom:22px}
+  .msg{margin:0 0 18px;padding:12px 15px;border-radius:12px;background:var(--card);
+    border:1px solid var(--border)}
+  .msg .who{font-size:11px;color:var(--t3);margin-bottom:5px}
+  .msg.user{background:#eff4ff;border-color:#dbe7ff}
+  .msg .body{font-size:14.5px;line-height:1.8;word-break:break-word}
+  .msg .body pre{background:#f1f3f6;padding:10px;border-radius:8px;overflow:auto}
+  .msg .body table{border-collapse:collapse;width:100%;font-size:12.5px}
+  .msg .body th,.msg .body td{border:1px solid var(--border);padding:5px 8px;text-align:left}
+  .empty{padding:40px;text-align:center;color:var(--t3)}
+  .foot{margin-top:30px;color:var(--t3);font-size:11px;text-align:center}
+  .gate{max-width:360px;margin:60px auto;background:var(--card);border:1px solid var(--border);
+    border-radius:14px;padding:22px}
+  .gate h2{font-size:16px;margin:0 0 6px}
+  .gate p{color:var(--t3);font-size:12px;margin:0 0 12px}
+  .gate input{width:100%;padding:9px 11px;border:1px solid var(--border);
+    border-radius:9px;font:inherit;margin-bottom:10px}
+  .gate button{width:100%;padding:9px;border:0;border-radius:9px;
+    background:var(--brand);color:#fff;font:inherit;cursor:pointer}
+  .gate .err{color:#b02a37;font-size:12px;margin-top:8px}
+</style>
+</head>
+<body>
+<div class="wrap">
+  <div class="brand"><div class="mark">鉴</div><strong>知鉴 KnowLens</strong>
+    <span style="color:var(--t3);font-size:11px;margin-left:auto">只读分享</span></div>
+  <h1 id="title">加载中…</h1>
+  <div class="meta" id="meta"></div>
+  <div id="msgs"></div>
+  <div class="foot">由知鉴 KnowLens 生成 · 内容为分享时刻的快照</div>
+</div>
+<script src="/static/vendor/marked.min.js"></script>
+<script>
+  const token = location.pathname.split("/").filter(Boolean).pop();
+  const esc = (s) => String(s == null ? "" : s).replace(/[&<>"']/g,
+    (c) => ({"&":"&amp;","<":"&lt;",">":"&gt;",'"':"&quot;","'":"&#39;"}[c]));
+  const titleEl = document.getElementById("title");
+  const metaEl = document.getElementById("meta");
+  const box = document.getElementById("msgs");
+
+  function render(data) {
+    titleEl.textContent = data.title || "分享内容";
+    metaEl.textContent =
+      `分享于 ${data.created_at || ""} · ${(data.payload.messages || []).length} 条消息` +
+      (data.views ? ` · ${data.views} 次查看` : "");
+    const messages = data.payload.messages || [];
+    if (!messages.length) {
+      box.innerHTML = '<div class="empty">这次分享没有消息内容</div>';
+      return;
+    }
+    box.innerHTML = messages.map((m) => {
+      const isUser = m.role === "user";
+      const body = isUser ? esc(m.content || "") : marked.parse(m.content || "");
+      return `<div class="msg ${isUser ? "user" : ""}">
+        <div class="who">${isUser ? "提问" : "知鉴"}</div>
+        <div class="body">${body}</div></div>`;
+    }).join("");
+  }
+
+  function gate(message) {
+    titleEl.textContent = "需要访问密码";
+    metaEl.textContent = "";
+    box.innerHTML = `<div class="gate"><h2>这是一个受保护的分享</h2>
+      <p>${esc(message || "请输入分享者提供的密码")}</p>
+      <input id="share-password" type="password" placeholder="访问密码" autofocus>
+      <button id="share-open">打开分享</button><div class="err" id="share-err"></div></div>`;
+    document.getElementById("share-open").onclick = () => load(
+      document.getElementById("share-password").value);
+    document.getElementById("share-password").onkeydown = (ev) => {
+      if (ev.key === "Enter") load(ev.target.value);
+    };
+  }
+
+  function load(password) {
+    const headers = password ? {"X-Share-Password": password} : {};
+    fetch(`/api/platform/share/${encodeURIComponent(token)}`, { headers })
+      .then(async (r) => {
+        if (r.status === 401) { gate("密码不正确，请重试"); return null; }
+        if (!r.ok) throw new Error((await r.json().catch(() => ({}))).detail || r.status);
+        return r.json();
+      })
+      .then((data) => { if (data) render(data); })
+      .catch((err) => {
+        titleEl.textContent = "无法打开分享";
+        metaEl.textContent = err.message || "";
+      });
+  }
+  load("");
+</script>
+</body>
+</html>

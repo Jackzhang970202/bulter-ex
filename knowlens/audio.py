@@ -55,6 +55,14 @@ def _norm_wav(src, workdir):
 
 
 def _probe_duration(wav):
+    # The normalized file is always a PCM WAV, so its frame count is the most
+    # reliable duration source (ffprobe may not exist next to the bundled ffmpeg).
+    try:
+        import wave
+        with wave.open(wav, "rb") as w:
+            return w.getnframes() / float(w.getframerate() or 1)
+    except Exception:
+        pass
     try:
         out = subprocess.run(
             [ffmpeg_path().replace("ffmpeg", "ffprobe"), "-v", "error",
@@ -65,7 +73,7 @@ def _probe_duration(wav):
         return 0.0
 
 
-def _asr_faster_whisper(wav, on_log):
+def _asr_faster_whisper(wav, on_log, duration=0.0):
     from faster_whisper import WhisperModel
     global _ENGINE
     if _ENGINE is None:
@@ -75,9 +83,19 @@ def _asr_faster_whisper(wav, on_log):
         wav, language="zh", vad_filter=True, beam_size=1,
         initial_prompt="以下是普通话的部门会议录音转写，请使用简体中文输出。")
     out = []
+    last_pct, last_emit = 0, 0.0
     for s in segs:
         out.append((s.start, s.end, s.text.strip()))
-        on_log(f"转写进度 {s.end:.0f}s")
+        end = float(s.end or 0)
+        if duration and duration > 0:
+            pct = min(99, max(0, int(round(end / duration * 100))))
+            if pct > last_pct and (pct - last_pct >= 1 or end - last_emit >= 30):
+                on_log(f"转写 {pct}%（{end:.0f}/{duration:.0f} 秒）")
+                last_pct, last_emit = pct, end
+        elif end - last_emit >= 30:
+            # Unknown duration: never fake a percentage.
+            on_log(f"已转写 {end:.0f} 秒（总时长未知）")
+            last_emit = end
     return out
 
 
@@ -117,11 +135,12 @@ def transcribe_to_minutes_md(path, name, on_log):
     try:
         wav = _norm_wav(path, workdir)
         dur = _probe_duration(wav)
-        on_log(f"音频时长约 {dur:.0f}s，开始转写…")
+        on_log(f"音频时长 {dur:.0f} 秒，开始转写（0%）" if dur > 0
+               else "开始转写（总时长未知，显示已转写时长）")
         segments = None
         try:
             import faster_whisper  # noqa
-            segments = _asr_faster_whisper(wav, on_log)
+            segments = _asr_faster_whisper(wav, on_log, dur)
         except ImportError:
             on_log("faster-whisper 未安装，尝试 OpenAI 兼容转写端点…")
             try:
@@ -137,7 +156,7 @@ def transcribe_to_minutes_md(path, name, on_log):
             mm, ss = divmod(int(st), 60)
             ts_lines.append(f"[{mm:02d}:{ss:02d}] {text}")
         transcript = "\n".join(ts_lines)
-        on_log("转录完成，生成结构化纪要…")
+        on_log("转写完成（100%），生成结构化纪要…")
         minutes_md = _structure_minutes(name, transcript)
         return (f"# {name} 转录稿\n\n（带时间码全文）\n\n{transcript}\n\n"
                 + minutes_md)

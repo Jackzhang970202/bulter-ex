@@ -5,6 +5,7 @@ All keys and endpoints can be provided via environment variables or the .env fil
 The primary channel is an OpenAI-compatible endpoint; the fallback channel is an Anthropic-compatible endpoint (probed for fallback at startup).
 """
 import os
+import re
 
 from dotenv import load_dotenv
 
@@ -14,7 +15,7 @@ load_dotenv(os.path.join(ROOT, ".env"), override=False)
 # ── Brand ──
 APP_NAME = "知鉴"
 APP_NAME_EN = "KnowLens"
-VERSION = "0.1.0"
+VERSION = "0.3.0"
 TAGLINE = "有出处的回答，会进化的知识"
 
 # ── Paths ──
@@ -30,18 +31,23 @@ def _env(name: str, default: str = "") -> str:
     return (os.environ.get(name) or default).strip()
 
 
+def _model(value: str) -> str:
+    """Providers reject client-side context hints such as qwen3.8-flash[1m]."""
+    return re.sub(r"\[[^\]]*\]\s*$", "", (value or "").strip())
+
+
 # ── Model channels (keys come from environment variables only) ──
 MIMO = {
     "protocol": "openai",
-    "model": _env("LLM_MODEL", "mimo-v2.6-pro"),
+    "model": _model(_env("LLM_MODEL", "mimo-v2.6-pro")),
     "api_key": _env("LLM_API_KEY"),
     "base_url": _env("LLM_BASE_URL"),
 }
 MAAS = {
     "protocol": "anthropic",
-    "model": _env("FALLBACK_MODEL",
-                  os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL",
-                                 "qwen3.8-flash[1m]")),
+    "model": _model(_env("FALLBACK_MODEL",
+                         os.environ.get("ANTHROPIC_DEFAULT_HAIKU_MODEL",
+                                        "qwen3.8-flash"))),
     "api_key": _env("FALLBACK_API_KEY"),
     "base_url": _env("FALLBACK_BASE_URL"),
 }

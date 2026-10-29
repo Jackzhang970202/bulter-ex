@@ -4,11 +4,11 @@
 
 **有出处的回答，会进化的知识。**
 
-部门级知识问答与经验演进智能体：把部门文档、图片、录音变成可检索、可引用、可核验的知识，并通过“候选 → 审核 → 规则 / 画像 → 发行版”的闭环持续进化；提供驾驶舱总览，可选接入 Claude Code 开发经验。
+部门级知识问答与经验演进智能体：把部门文档、图片、录音变成可检索、可引用、可核验的知识，并通过“候选 → 审核 → 规则 / 画像 → 发行版”的闭环持续进化；提供 193 项功能、驾驶舱总览、智能体平台（智能体、1,137 个可安装开源技能、专家、团队、工作流、自动化），可选接入 Claude Code 开发经验。
 
 ![License](https://img.shields.io/badge/license-MIT-blue.svg)
 ![Python](https://img.shields.io/badge/python-3.10%2B-blue.svg)
-![Version](https://img.shields.io/badge/version-0.1.0-green.svg)
+![Version](https://img.shields.io/badge/version-0.3.0-green.svg)
 
 ## 截图
 
@@ -28,6 +28,8 @@
 | 五阶段问答 | 范围路由 → 逐页取证 → 充分性检查 → 四段式回答 → 引用核验 |
 | 可核验引用 | 引用精确到文档页码，可展开原文；无效引用自动剔除 |
 | 双窗口问答 | 库内问答与临时资料问答；库详情右下角提供单库迷你问答 |
+| 知识空间可溯源问答 | 在当前库/当前文档内直接提问；选中任意文字或数字可问"这个数怎么来的"；溯源卡给出文档/页码/段落/图片、计算公式与输入出处，并可跳回原文高亮；面板会话按范围持久化 |
+| 网页入库 | 粘贴公开网页链接，预览抽取的 Markdown，打标签后进入当前库的索引流程 |
 | 多模态入库 | PDF（文本 / 扫描 / 图文混排）、Word、PPT、Excel、Markdown、图片、录音 |
 | 图片理解 | 逐张转写文字并生成语义说明，按版面 / 文档顺序写入正文，参与检索与引用 |
 | 录音管线 | ffmpeg 归一 → ASR → 带时间码转录 → 结构化会议纪要（议程 / 结论 / 行动项 / 术语） |
@@ -35,25 +37,57 @@
 | 驾驶舱 | 知识健康、问答判定、入库趋势、库健康、风险待办、模型调用量 |
 | Claude Code 接入（可选） | 导入开发会话提炼经验；把发行版注入项目 SessionStart hook，默认关闭 |
 
+
+## 智能体平台（0.3.0）
+
+知识内核同时就是一个智能体平台：智能体、技能、专家、团队、工作流与自动化，和知识问答共用同一个进程、同一个数据库、同一个界面。
+
+| 能力 | 说明 |
+|---|---|
+| 智能体 | 配置角色、模型、温度、推理步数、知识范围、技能与工具权限；发布时生成版本快照，可回滚 |
+| 统一工作台 | 知识、智能体、专家、团队、工作流、Excel 问数共用一个输入区；附件、运行表单、轨迹同屏 |
+| AI 创建 | 说一句目标，AI 生成可校验的工作流/智能体/团队草稿，最多追问 3 个问题，不自动发布 |
+| 分享与产物 | 只读对话分享链接、产物独立页面、智能体版本对比 |
+| 外部运行时 | 可选接入 zdata-agent-starter：发现其智能体/团队/工作流，在同一对话中运行（`ZDATA_BASE_URL`） |
+| Excel 问数 | 上传 xlsx/xls/csv，识别工作表与列，用自然语言提问；生成的 pandas 在 AST 校验后的子进程执行，返回结果表与可选图表 |
+| 技能市场 | 集成 **1,137 个开源技能**（来自 4 个开源仓库，仅存元数据）；按需安装、分类/许可筛选、链接导入，也可自定义提示词 / HTTP / 脚本 / MCP 技能，并组合成一级对象“技能包” |
+| 专家广场 | 把已发布智能体包装成可检索的专家，支持专长标签、评分与咨询次数 |
+| 团队协作 | 圆桌、主管调度、交接三种策略，可指定综合智能体与最大轮次 |
+| 工作流 | 类型化 DAG（LLM / 智能体 / 技能 / 工具 / 知识 / 条件 / 并行 / 审批 / 延时），JSON 编辑、实时流程图、运行追踪、审批后继续 |
+| MCP 注册表 | 浏览官方 MCP 服务目录，读取工具列表，把远程服务接入为可执行技能 |
+| 工具 | 服务端白名单：知识检索、计算器、JSON 查询、时间、HTTP（防 SSRF）、文件读取、网页搜索；每次调用留痕；支持带深度上限的智能体互相委派 |
+| 记忆与进化 | 会话历史、用户/智能体/空间/全局记忆、从纠正与失败运行中抽取候选、人工审核后注入提示词 |
+| 评测 | 每个智能体可建评测集，关键词命中计分，得分绑定版本 |
+| 自动化 | 五段式 cron 定时运行智能体或工作流，支持立即运行、下次时间与历史记录 |
+| 运营 | X-User-Id 身份与 admin/editor/viewer 角色、发布审核、审计日志、产物与用量概览 |
+| 全局搜索 | `Ctrl/Cmd+K` 搜索文档、智能体、技能、专家、团队、工作流、会话与记忆 |
+| 中英界面 | 所有界面文案集中在 `web/i18n.js`，在设置中一键切换，无需构建 |
+
+平台层是增量实现：原有路由与数据表不变；设置 `KNOWLENS_PLATFORM=0` 可恢复纯 0.2.0 行为。
+
 ## 架构
 
 ```
-浏览器（原生 JS + ECharts）
+浏览器（原生 JS + ECharts，无构建步骤）
    │ REST / SSE
-FastAPI 服务
-   ├─ 问答管线：路由 → PageIndex 工具循环 → 引用核验
+FastAPI 服务（单进程、单端口）
+   ├─ 知识：问答路由 → PageIndex 工具循环 → 引用核验
    ├─ 入库管线：PDF / Office / 图片 / 录音 → 层级树 → 索引
    ├─ 经验引擎：候选 → 审核 → 规则 / 画像 → 发行版 → 注入
-   └─ 存储：SQLite（WAL）+ 文件目录（索引 / 原文 / OCR 缓存）
+   ├─ 平台：智能体 / 技能 / 专家 / 团队 / 工作流 / 工具 / 记忆
+   └─ 存储：SQLite（WAL）+ 文件（索引 / 原文 / OCR 缓存 / 运行产物）
 ```
 
 ```
 knowlens/            后端包（FastAPI、问答、入库、演进、视觉、音频）
+knowlens/platform/   智能体平台（智能体、技能、运行时、工具、工作流、运营）
+catalog/             开源技能目录（1,137 条，仅元数据）
+design/              五轮设计推演与功能清单
 web/                 前端（index.html / app.js / 主题与组件样式 / vendor）
 vendor/pageindex/    内嵌 PageIndex 检索引擎（MIT）
 scripts/             启动、发行版注入、发布构建
 tests/               不依赖模型的核心测试
-docs/                架构、使用、图片
+docs/                架构、使用指南、运维手册、图片
 data/                运行时数据（不入库）
 ```
 
@@ -106,6 +140,7 @@ docker compose up -d --build
 5. **提问**：输入卡中选择库与标签后提问。回答分四段：结论（能 / 不能 / 有条件 / 未覆盖）、依据（带引用）、方法或改进（推断内容明确标注）、缺失资料。展开“中间过程”可查看路由、工具调用与人话化的原始数据。
 6. **经验中心**：审核候选（支持证据回放）、维护规则、查看与回滚发行版、查看蒸馏历史；可选配置 Claude Code 开发经验。
 7. **驾驶舱**：查看知识健康、问答质量、入库趋势、风险待办与模型调用量。
+8. **知识空间内问答**：在库详情右侧打开助手，或直接选中正文中的文字/数字问"这个数怎么来的"；回答带溯源卡，点"打开原文"跳页并高亮；面板会话按库/文档范围持久化。
 
 ## 多模态说明
 
@@ -155,13 +190,24 @@ PDF 默认使用 **pdfplumber + pypdfium2**（宽松许可）；如自行安装 
 | GET/POST | `/api/candidates/...` | 候选审核与证据 |
 | GET/POST | `/api/spaces/{id}/digest` | 发行版 |
 | GET/POST | `/api/spaces/{id}/cc/...` | 开发经验采集与注入 |
+| GET/POST | `/api/platform/agents` | 智能体 CRUD、发布、版本、运行（SSE） |
+| GET | `/api/platform/skills/catalog` | 检索 1,137 个开源技能 |
+| POST | `/api/platform/skills/install` | 安装目录技能 |
+| GET/POST | `/api/platform/experts`、`/teams` | 专家与团队，运行（SSE） |
+| GET/POST | `/api/platform/workflows` | 类型化 DAG、校验、运行（SSE） |
+| GET | `/api/platform/runs/{id}` | 运行步骤与产物 |
+| GET/POST | `/api/platform/schedules` | cron 自动化 |
+| GET | `/api/platform/search?q=` | 全局搜索（命令面板） |
+| GET | `/api/platform/overview` | 平台指标与 14 天趋势 |
 
 ## 开发与测试
 
 ```bash
 python -m compileall -q knowlens scripts tests
-python -m unittest discover -s tests -v
+python -m unittest discover -s tests -v     # 58 个测试：核心、平台 API、单元
 node --check web/app.js
+node --check web/platform.js
+node --check web/i18n.js
 ```
 
 CI 在 GitHub Actions 中执行以上检查，不调用真实模型。
@@ -177,9 +223,16 @@ CI 在 GitHub Actions 中执行以上检查，不调用真实模型。
 
 - 大库检索的词法 / 向量混合召回
 - 空间导出与导入（整库迁移）
-- 多用户与鉴权
+- 技能目录的向量召回
 - 图片理解结果的人工校正回写
 - 更多类型的驾驶舱指标与告警
+- 暂缓：SSO/JWT、PostgreSQL、Milvus、拖拽式工作流画布
+
+发布说明：[`docs/release-notes-0.3.0.md`](docs/release-notes-0.3.0.md)。
+
+使用指南：[`docs/user-guide.zh-CN.md`](docs/user-guide.zh-CN.md)；产品内右上角 `?` 也可打开。
+
+运维手册：[`docs/platform-operations.md`](docs/platform-operations.md)，涵盖启停、模型通道、备份、权限、技能、MCP、调度与排障。
 
 ## 许可证与第三方
 

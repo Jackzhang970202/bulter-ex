@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "knowlens"
-version = "0.1.0"
-description = "KnowLens — department knowledge Q&A and experience-evolution agent"
+version = "0.3.0"
+description = "KnowLens — knowledge Q&A plus an agent platform with skills, experts, teams and workflows"
 readme = "README.md"
 license = { text = "MIT" }
 requires-python = ">=3.10"
 authors = [{ name = "KnowLens Contributors" }]
-keywords = ["knowledge-base", "rag", "pageindex", "department", "self-evolving"]
+keywords = ["knowledge-base", "rag", "pageindex", "agents", "skills", "workflows", "self-evolving"]
 classifiers = [
   "Development Status :: 3 - Alpha",
   "License :: OSI Approved :: MIT License",

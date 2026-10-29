@@ -13,7 +13,11 @@ const state = {
   scopeLibs: [], scopeTags: [], adhocFiles: [], refLibs: false,
   histCursor: 0,
   drawer: { did: null, doc: null, tree: null, page: 1, mode: "page", timer: null },
-  mini: { open: false, libId: null, sessions: {}, running: false },
+  mini: {
+    open: false, libId: null, sessions: {}, running: false,
+    scope: { type: "library", docId: null, dbId: null, docName: "",
+             page: 0, selection: "", before: "", after: "" },
+  },
 };
 
 /* ── 基础工具 ── */
@@ -36,13 +40,21 @@ function toast(msg, cls = "") {
   setTimeout(() => t.remove(), 4200);
 }
 
+let _modalTrigger = null;
 function openModal(title, bodyHTML, footHTML) {
+  _modalTrigger = document.activeElement;
   $("#modal-title").textContent = title;
   $("#modal-body").innerHTML = bodyHTML;
   $("#modal-foot").innerHTML = footHTML || "";
   $("#modal-back").classList.add("show");
 }
-function closeModal() { $("#modal-back").classList.remove("show"); }
+function closeModal() {
+  $("#modal-back").classList.remove("show");
+  if (_modalTrigger && _modalTrigger.focus) {
+    try { _modalTrigger.focus(); } catch (e) {}
+  }
+  _modalTrigger = null;
+}
 $("#modal-back").addEventListener("click", e => { if (e.target.id === "modal-back") closeModal(); });
 
 function md2html(text) {
@@ -101,6 +113,104 @@ function renderAnswerHTML(text, verdict, compact) {
   }).join("");
 }
 
+function encArg(s) {
+  return encodeURIComponent(String(s || "")).replace(/'/g, "%27");
+}
+
+function renderProvenance(prov, compact) {
+  if (!prov || !prov.length) return "";
+  const meta = {
+    direct: { cls: "ok", label: "原文直接给出" },
+    derived: { cls: "warn", label: "由资料计算" },
+    not_found: { cls: "gray", label: "未找到" },
+  };
+  return `<div class="prov">
+    <div class="prov-title">溯源</div>
+    ${prov.map(t => {
+      const st = meta[t.status] || meta.not_found;
+      const srcs = (t.sources || []).map(s => `
+        <div class="prov-src">
+          <a onclick="jumpToSource('${esc(s.db_id || "")}','${s.page || 0}',
+            '${encArg((s.excerpt || "").slice(0, 80))}')">打开原文</a>
+          <span>${esc(s.doc_name || "")} · 第 ${s.page || "?"} 页 · ${esc(s.kind || "text")}</span>
+          ${s.excerpt ? `<div class="ex">${esc(s.excerpt.slice(0, 160))}</div>` : ""}
+        </div>`).join("");
+      const d = t.derivation || {};
+      const deriv = (d.formula || (d.inputs || []).length) ? `
+        <div class="prov-formula">${esc(d.formula || "")}</div>
+        <div class="prov-inputs">${(d.inputs || []).map(x =>
+          `· ${esc(x.value)} — ${esc(x.source)}`).join("<br>")}</div>` : "";
+      const miss = (t.missing || []).length
+        ? `<div class="prov-missing">缺失：${t.missing.map(esc).join("；")}</div>` : "";
+      return `<div class="prov-target">
+        <div class="prov-head"><span class="badge ${st.cls}">${st.label}</span>
+          <span class="prov-value">${esc(t.value || "")}</span></div>
+        ${srcs}${deriv}${miss}</div>`;
+    }).join("")}
+  </div>`;
+}
+
+async function jumpToSource(dbId, page, enc) {
+  const excerpt = decodeURIComponent(enc || "");
+  await openDocAtPage(dbId, page, excerpt);
+}
+
+async function openDocAtPage(dbId, page, excerpt) {
+  if (!dbId) return;
+  let d = state.docs.find(x => x.id === dbId);
+  if (!d && state.lib) {
+    try { state.docs = await api(`/api/libraries/${state.lib}/documents`); }
+    catch (e) {}
+    d = state.docs.find(x => x.id === dbId);
+  }
+  if (!d) return toast("未找到该文档，请先打开所属库", "err");
+  if (state.drawer.did !== dbId) await openDocDrawer(dbId);
+  state.drawer.mode = "page";
+  state.drawer.page = Math.max(1, page || 1);
+  drawDrawerContent();
+  await new Promise(r => setTimeout(r, 250));
+  await loadDrawerPage();
+  if (excerpt) highlightExcerpt(excerpt);
+}
+
+function highlightExcerpt(needle) {
+  const body = document.querySelector("#pg-body");
+  if (!body || !needle) return;
+  const clean = String(needle).replace(/[*#|>`]/g, " ").replace(/\s+/g, " ").trim();
+  if (!clean) return;
+  const attempts = [clean.slice(0, 60), clean.slice(0, 40),
+    clean.slice(0, 20), clean.slice(0, 10)].filter(s => s.length >= 6);
+  const full = body.textContent || "";
+  let hit = null;
+  for (const a of attempts) {
+    const idx = full.indexOf(a);
+    if (idx >= 0) { hit = { needle: a, idx }; break; }
+  }
+  if (!hit) { toast("原文页已打开，摘录未精确匹配"); return; }
+  const walker = document.createTreeWalker(body, NodeFilter.SHOW_TEXT);
+  let node, pos = 0, found = null;
+  while ((node = walker.nextNode())) {
+    const len = node.nodeValue.length;
+    if (hit.idx < pos + len) { found = { node, off: hit.idx - pos }; break; }
+    pos += len;
+  }
+  if (!found) return;
+  const val = found.node.nodeValue;
+  const end = Math.min(val.length, found.off + hit.needle.length);
+  const mark = document.createElement("mark");
+  mark.className = "hl-flash";
+  mark.textContent = val.slice(found.off, end);
+  const parent = found.node.parentNode;
+  parent.insertBefore(document.createTextNode(val.slice(0, found.off)), found.node);
+  parent.insertBefore(mark, found.node);
+  parent.insertBefore(document.createTextNode(val.slice(end)), found.node);
+  parent.removeChild(found.node);
+  mark.scrollIntoView({ block: "center", behavior: "smooth" });
+  setTimeout(() => {
+    if (mark.parentNode) mark.replaceWith(document.createTextNode(mark.textContent));
+  }, 5200);
+}
+
 const KIND_ICON = { pdf: "📄", docx: "📃", pptx: "📊", xlsx: "📈", xls: "📈",
   md: "📝", txt: "📝", audio: "🎙️", image: "🖼️", unknown: "📎" };
 const VERDICT_CLS = { "能": "ok", "不能": "err", "有条件": "warn",
@@ -123,7 +233,9 @@ async function boot() {
     const next = document.documentElement.dataset.theme === "dark" ? "light" : "dark";
     document.documentElement.dataset.theme = next;
     localStorage.setItem("dkb-theme", next);
+    // Re-render the active view so charts and computed colors follow the theme.
     if (state.view === "settings") renderSettings();
+    else if (state.view !== "chat" && state.view !== "kb") switchView(state.view);
   };
   $$("#nav .nav-item").forEach(b => b.onclick = () => switchView(b.dataset.view));
   $("#btn-refresh").onclick = () => refreshAll();
@@ -143,7 +255,9 @@ async function boot() {
   $("#drawer-mask").onclick = closeDrawer;
   $("#dw-close").onclick = closeDrawer;
   initDrawerResizer();
+  if (window.KP) KP.init();
   initMiniChat();
+  initSelectionToolbar();
   try {
     const st = await api("/api/status");
     $("#model-info").textContent = `${st.channel} · ${st.model}` + (st.ffmpeg ? "" : " · 无ffmpeg");
@@ -185,7 +299,17 @@ async function doNewSpace() {
 const VIEW_META = {
   dashboard: { title: "驾驶舱", sub: "空间总览与知识健康" },
   kb: { title: "知识空间", sub: "空间、库与文档" },
+  kb2: { title: "知识库", sub: "解析、分块、检索与治理" },
+  models: { title: "模型配置", sub: "LLM / 嵌入 / 重排 / 视觉 / 语音" },
   chat: { title: "智能问答", sub: "基于资料回答，逐句带出处" },
+  agents: { title: "智能体", sub: "可配置、可测试、可发布的智能体" },
+  skills: { title: "技能市场", sub: "1100+ 开源技能与自定义技能" },
+  experts: { title: "专家广场", sub: "把智能体包装成可咨询的专家" },
+  teams: { title: "团队协作", sub: "多智能体圆桌、调度与交接" },
+  workflows: { title: "工作流", sub: "可视化编排、审批与运行追踪" },
+  automation: { title: "自动化", sub: "定时任务与运行产物" },
+  designer: { title: "AI 创建", sub: "和 AI 对话，实时看到草稿变化" },
+  ops: { title: "运营后台", sub: "概览、审核、审计与权限" },
   evolve: { title: "经验中心", sub: "候选、规则与发行版" },
   settings: { title: "设置", sub: "模型、存储与外观" },
 };
@@ -207,6 +331,7 @@ function switchView(v) {
   if (v === "chat") renderChat();
   if (v === "evolve") renderEvolve();
   if (v === "settings") renderSettings();
+  if (window.KP && KP.VIEWS.includes(v)) KP.render(v);
   loadHistory();
 }
 
@@ -459,15 +584,13 @@ function initDashboardCharts(d) {
     grid: { left: 6, right: 6, top: 34, bottom: 2, containLabel: true },
     xAxis: { type: "category", data: days, axisLine: { show: false },
       axisTick: { show: false }, axisLabel },
-    yAxis: [
-      { type: "value", splitLine: { lineStyle: { color: border, type: "dashed" } }, axisLabel },
-      { type: "value", splitLine: { show: false }, axisLabel: { show: false } },
-    ],
+    yAxis: { type: "value", minInterval: 1,
+      splitLine: { lineStyle: { color: border, type: "dashed" } }, axisLabel },
     series: [
       { name: "问答", type: "line", smooth: true, symbol: "circle", symbolSize: 5,
         lineStyle: { width: 3 }, areaStyle: { opacity: .16 },
         data: d.trend.map(x => x.qa) },
-      { name: "入库", type: "bar", yAxisIndex: 1, barWidth: 8,
+      { name: "入库", type: "bar", barWidth: 8,
         itemStyle: { borderRadius: [4, 4, 0, 0], color: "rgba(25,197,214,.55)" },
         data: d.trend.map(x => x.docs) },
     ],
@@ -571,6 +694,15 @@ async function renderSettings() {
         <span class="v">停止服务后备份整个数据目录即可</span></div>
     </div>
     <div class="dash-card reveal">
+      <div class="dc-head"><h3>语言 / Language</h3></div>
+      <div class="setting-row"><span class="k">界面语言</span><span class="v">
+        <button class="btn sm ${window.I18N && I18N.current() === "zh" ? "primary" : ""}"
+          onclick="I18N.set('zh')">中文</button>
+        <button class="btn sm ${window.I18N && I18N.current() === "en" ? "primary" : ""}"
+          onclick="I18N.set('en')">English</button></span></div>
+      <div class="help" style="margin-top:8px">界面文案集中维护在 web/i18n.js；文档、智能体提示词等业务内容保持原文。</div>
+    </div>
+    <div class="dash-card reveal">
       <div class="dc-head"><h3>外观</h3></div>
       <div class="setting-row"><span class="k">主题</span><span class="v">
         <button class="btn sm ${theme === "light" ? "primary" : ""}" onclick="setTheme('light')">浅色玻璃</button>
@@ -621,7 +753,8 @@ async function renderKB() {
   }
   if (!state.lib) {
     $("#topbar-actions").innerHTML =
-      `<button class="btn primary" onclick="newLibDialog()">＋ 新建库</button>`;
+      `<button class="btn ghost" onclick="switchView('kb2')" title="统一知识库：解析、分块、检索与治理">知识库</button>
+       <button class="btn primary" onclick="newLibDialog()">＋ 新建库</button>`;
     v.innerHTML = `<div class="grid" id="lib-grid"></div>`;
     $("#lib-grid").innerHTML = state.libs.map(l => `
       <div class="card clickable" onclick="openLib('${l.id}')">
@@ -651,6 +784,7 @@ async function renderLibDetail() {
   $("#topbar-actions").innerHTML = `
     <button class="btn" onclick="state.lib=null;renderKB()">← 返回库列表</button>
     <button class="btn" onclick="delLib('${lib.id}')" style="color:var(--error)">删除库</button>
+    <button class="btn" onclick="urlIngestDialog()">🔗 链接入库</button>
     <button class="btn primary" onclick="uploadDialog('${lib.id}')">⬆ 上传文件</button>`;
   $("#kb-fab").classList.add("show");
   $("#kb-fab").title = `直接问答「${lib.name}」`;
@@ -662,12 +796,14 @@ async function renderLibDetail() {
     </div>
     ${lib.summary ? `<div class="help mb8">库摘要（随上传自动演进）：${esc(lib.summary)}</div>` : ""}
     <div id="index-banner"></div>
+    <div id="bulk-bar"></div>
     <div id="doc-rows"></div>`;
   drawDocTable();
   pollProgress();
 }
 
 function drawDocTable() {
+  state._bulkSel = state._bulkSel || new Set();
   const rows = state.docs.map(d => {
     let st;
     if (d.status === "ready") st = `<span class="badge ok">就绪 ${d.pages}页</span>`;
@@ -685,19 +821,128 @@ function drawDocTable() {
       `<button class="btn sm ghost" style="color:var(--error)" onclick="delDoc('${d.id}','${esc(d.name)}')">删除</button>`,
     ].join("");
     const clickable = d.status === "ready";
+    state._bulkSel = state._bulkSel || new Set();
+    const checked = state._bulkSel.has(d.id) ? "checked" : "";
     return `<tr style="${clickable ? "cursor:pointer" : ""}"
       ${clickable ? `onclick="openDocDrawer('${d.id}')"` : ""}>
+      <td onclick="event.stopPropagation()"><input type="checkbox" class="doc-sel"
+        data-id="${d.id}" ${checked} onclick="toggleDocSel('${d.id}',this)"></td>
       <td>${KIND_ICON[d.kind] || "📎"} ${esc(d.name)}</td>
       <td>${esc(d.kind)}</td><td>${st}</td><td>${tags}</td>
       <td class="right" onclick="event.stopPropagation()">${acts}</td></tr>`;
   }).join("");
   $("#doc-rows").innerHTML = state.docs.length ? `
     <table class="doc-table"><thead><tr>
-      <th style="width:34%">文件</th><th>类型</th><th>状态</th><th>标签</th>
+      <th style="width:28px"><input type="checkbox" id="doc-sel-all" title="全选"
+        onclick="toggleAllDocs(this)"></th>
+      <th style="width:32%">文件</th><th>类型</th><th>状态</th><th>标签</th>
       <th class="right">操作</th></tr></thead><tbody>${rows}</tbody></table>
       <div class="help mt8">点击文件行查看内容（结构树 / 逐页浏览）；右下角 💬 直接对本库提问。</div>`
     : `<div class="empty"><div class="big">📭</div>库内暂无文件，点右上角「上传文件」或直接把文件/文件夹拖进来</div>`;
+  const ids = new Set((state.docs || []).map(d => d.id));
+  (state._bulkSel || new Set()).forEach(id => {
+    if (!ids.has(id)) state._bulkSel.delete(id);
+  });
+  drawBulkBar();
   drawIndexBanner();
+}
+
+function toggleDocSel(id, box) {
+  state._bulkSel = state._bulkSel || new Set();
+  if (box.checked) state._bulkSel.add(id); else state._bulkSel.delete(id);
+  drawBulkBar();
+}
+
+function toggleAllDocs(box) {
+  state._bulkSel = new Set(box.checked ? (state.docs || []).map(d => d.id) : []);
+  drawDocTable();
+}
+
+function drawBulkBar() {
+  const bar = $("#bulk-bar");
+  if (!bar) return;
+  const n = (state._bulkSel || new Set()).size;
+  bar.innerHTML = n ? `<div class="help" style="display:flex;align-items:center;gap:10px">
+    <b>已选 ${n} 项</b>
+    <button class="btn sm primary" onclick="bulkTagDialog()">批量标签</button>
+    <button class="btn sm ghost" onclick="state._bulkSel.clear();drawDocTable()">清除选择</button>
+  </div>` : "";
+}
+
+function bulkTagDialog() {
+  const names = (state.tags || []).map(t => t.name);
+  const boxes = (cls) => names.map(t =>
+    `<label style="display:inline-flex;gap:5px;align-items:center;margin:3px 8px 3px 0">
+      <input type="checkbox" class="${cls}" value="${esc(t)}"> ${esc(t)}
+    </label>`).join("");
+  openModal("批量标签", `
+    <div class="help mb8">已选 ${state._bulkSel.size} 篇文档。勾选要添加或移除的标签。</div>
+    <div class="mb8"><b style="font-size:12.5px">添加标签</b><div>${boxes("bt-add") || "暂无已有标签"}</div></div>
+    <div class="mb8"><b style="font-size:12.5px">移除标签</b><div>${boxes("bt-remove") || "暂无已有标签"}</div></div>
+    <label style="display:block;font-size:12.5px">新标签（逗号分隔）
+      <input id="bt-new" class="w100" placeholder="例如：制度, 流程"></label>`,
+    `<button class="btn" onclick="closeModal()">取消</button>
+     <button class="btn primary" onclick="applyBulkTags()">应用</button>`);
+}
+
+async function applyBulkTags() {
+  const add = Array.from(document.querySelectorAll(".bt-add:checked")).map(n => n.value);
+  const remove = Array.from(document.querySelectorAll(".bt-remove:checked")).map(n => n.value);
+  const extra = ($("#bt-new").value || "").split(/[,，;；\s]+/).map(x => x.trim()).filter(Boolean);
+  if (!add.length && !remove.length && !extra.length) return toast("至少选择一个标签", "err");
+  try {
+    const r = await jpost("/api/platform/documents/bulk_tags", {
+      document_ids: Array.from(state._bulkSel),
+      add: add.concat(extra), remove,
+    });
+    toast(`已更新 ${r.documents} 篇：新增 ${r.added}，移除 ${r.removed}`, "ok");
+    closeModal();
+    state._bulkSel.clear();
+    state.docs = await api(`/api/libraries/${state.lib}/documents`);
+    drawDocTable();
+  } catch (e) { toast(e.message, "err"); }
+}
+
+
+function urlIngestDialog() {
+  openModal("网页链接入库", `
+    <div class="help mb8">抓取网页正文，转成 Markdown 后进入当前库的索引流程。仅支持公开页面。</div>
+    <label style="display:block;font-size:12.5px">页面链接
+      <input id="ui-url" class="w100" placeholder="https://example.com/article"></label>
+    <label style="display:block;font-size:12.5px;margin-top:8px">标签（逗号分隔，可选）
+      <input id="ui-tags" class="w100" placeholder="外部资料, 行业"></label>
+    <div style="margin-top:10px"><button class="btn sm" onclick="previewUrl()">预览正文</button></div>
+    <div id="ui-preview" class="help" style="margin-top:8px;max-height:240px;overflow:auto"></div>`,
+    `<button class="btn" onclick="closeModal()">取消</button>
+     <button class="btn primary" onclick="doUrlIngest()">入库</button>`);
+}
+
+async function previewUrl() {
+  const url = $("#ui-url").value.trim();
+  if (!url) return toast("请填写链接", "err");
+  const box = $("#ui-preview");
+  box.textContent = "抓取中…";
+  try {
+    const r = await jpost("/api/platform/ingest/preview", { url });
+    box.innerHTML = `<b>${esc(r.title)}</b> · ${r.chars} 字 · ${esc(r.url)}
+      <pre class="kp-pre" style="margin-top:6px;white-space:pre-wrap">${esc(r.markdown.slice(0, 3000))}</pre>`;
+  } catch (e) { box.textContent = "抓取失败：" + e.message; }
+}
+
+async function doUrlIngest() {
+  const url = $("#ui-url").value.trim();
+  const tags = ($("#ui-tags").value || "").split(/[,，;；\s]+/).filter(Boolean);
+  if (!url) return toast("请填写链接", "err");
+  try {
+    const r = await jpost("/api/platform/ingest/url", {
+      space_id: state.space, library_id: state.lib, url, tags,
+    });
+    toast(`已入库：${r.title}`, "ok");
+    closeModal();
+    state.docs = await api(`/api/libraries/${state.lib}/documents`);
+    drawDocTable();
+    pollProgress();
+  } catch (e) { toast(e.message, "err"); }
 }
 
 function drawIndexBanner() {
@@ -991,6 +1236,7 @@ async function openDocDrawer(did) {
   const lib = state.libs.find(l => l.id === d.library_id);
   $("#dw-lib").textContent = lib ? "库：" + lib.name : "";
   $("#dw-download").onclick = () => window.open(`/api/documents/${did}/download`);
+  $("#dw-ask").onclick = askDocument;
   drawDrawerBody();
   try {
     state.drawer.images = await api(`/api/documents/${did}/images`);
@@ -1194,24 +1440,32 @@ function renderChat() {
   v.innerHTML = `
     <div id="chat-wrap">
       <div id="chat-main">
+        <div id="kp-target-bar" style="display:none"></div>
         <div id="msgs"></div>
         <div id="composer">
           <div class="input-card" id="input-card">
+            <div class="kp-composer-top">
+              <button class="kp-inline-target" id="kp-inline-target"
+                onclick="KP.openTargetHub()" title="切换目标"></button>
+              <span class="kp-subs" id="kp-kb-subs"></span>
+            </div>
             <div class="attach-preview" id="attach-list"></div>
             <div class="scope-preview" id="scope-chips"></div>
             <textarea id="q-input" rows="2" placeholder="输入问题，Enter 发送，Shift+Enter 换行"></textarea>
-            <div class="control-bar">
-              <div class="seg" id="mode-seg">
-                <button data-m="kb">库内问答</button>
-                <button data-m="adhoc">临时问答</button>
-              </div>
-              <button class="cb-btn" id="btn-libpick">📚 选库 <span id="lib-n">0</span></button>
-              <button class="cb-btn" id="btn-attach" title="附加临时文件（不入知识库）">📎 附加文件</button>
-              <button class="cb-btn" id="btn-reflib" title="临时问答时同时参考空间已入库文档">🗂 参考库</button>
-              <span class="spacer"></span>
-              <button class="send-round" id="btn-send" title="发送 (Ctrl+Enter)">
+            <div class="control-bar kp-kb-bar">
+              <button class="kp-plus-btn" id="kp-kb-plus"
+                onclick="KP.openKbPlusMenu()" title="添加文件 / 链接 / 范围 / 模式">
                 <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
-                  <path d="M4 12h14M13 6l6 6-6 6" stroke="currentColor" stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
+                  <path d="M12 5v14M5 12h14" stroke="currentColor" stroke-width="2"
+                    stroke-linecap="round"/></svg></button>
+              <button class="kp-scope-btn" id="kp-kb-scope"
+                onclick="toggleLibPop()" title="选择检索范围">
+                范围 <b id="kb-scope-summary">全部库</b></button>
+              <span class="spacer"></span>
+              <button class="send-round" id="btn-send" title="发送">
+                <svg width="15" height="15" viewBox="0 0 24 24" fill="none">
+                  <path d="M12 19V5M5 12l7-7 7 7" stroke="currentColor"
+                    stroke-width="2.2" stroke-linecap="round" stroke-linejoin="round"/></svg>
               </button>
             </div>
             <div id="lib-pop"></div>
@@ -1222,9 +1476,10 @@ function renderChat() {
     </div>`;
   $("#btn-send").onclick = sendQuestion;
   $("#btn-send").disabled = state.running;
-  $("#btn-attach").onclick = () => $("#adhoc-input").click();
-  $("#btn-libpick").onclick = toggleLibPop;
-  $("#btn-reflib").onclick = () => { state.refLibs = !state.refLibs; syncCard(); };
+  const attachBtn = $("#btn-attach");
+  if (attachBtn) attachBtn.onclick = () => $("#adhoc-input").click();
+  const libBtn = $("#btn-libpick");
+  if (libBtn) libBtn.onclick = toggleLibPop;
   $("#q-input").addEventListener("keydown", e => {
     if (e.key !== "Enter" || e.shiftKey) return;   // Shift+Enter 换行
     if (e.isComposing || e.keyCode === 229) return; // 输入法选词中不发送
@@ -1244,6 +1499,9 @@ function renderChat() {
   ensureScrollGuard($("#msgs"));
   if (!state.sessionId) { welcomeScreen(); maybeRestoreLive(); }
   else reloadSession().then(() => maybeRestoreLive());
+  const main = $("#chat-main");
+  if (main) main.classList.toggle("home", !state.sessionId);
+  if (window.KP) KP.mountChatTargets();
 }
 
 function escLibPop(e) {
@@ -1279,14 +1537,8 @@ function drawLibPop() {
 }
 function syncCard() {
   const adhoc = state.chatMode === "adhoc";
-  $$("#mode-seg button").forEach(b => b.classList.toggle("on", b.dataset.m === state.chatMode));
-  $("#btn-attach").style.display = adhoc ? "" : "none";
-  $("#btn-reflib").style.display = adhoc ? "" : "none";
-  $("#btn-reflib").classList.toggle("on", state.refLibs);
-  $("#btn-libpick").style.display = adhoc ? "none" : "";
-  $("#btn-libpick").classList.toggle("on", !!state.scopeLibs.length);
-  $("#lib-n").textContent = state.scopeLibs.length;
-  $("#scope-chips").innerHTML = !adhoc ? state.scopeLibs.map(id => {
+  const scopeBox = $("#scope-chips");
+  if (scopeBox) scopeBox.innerHTML = !adhoc ? state.scopeLibs.map(id => {
     const l = state.libs.find(x => x.id === id);
     return l ? `<span class="att-chip"><span class="ic">📁</span><span class="nm">${esc(l.name)}</span>
       <span class="x" onclick="rmScopeLib('${id}')">✕</span></span>` : "";
@@ -1296,17 +1548,22 @@ function syncCard() {
       <span class="x" onclick="rmScopeTag('${tid}')">✕</span></span>` : "";
   }).join("") : "";
   drawAttachChips();
+  const summary = $("#kb-scope-summary");
+  if (summary) summary.textContent = adhoc ? "临时文件"
+    : (state.scopeLibs.length ? `${state.scopeLibs.length} 个库` : "全部库");
+  const scopeBtn = $("#kp-kb-scope");
+  if (scopeBtn) scopeBtn.classList.toggle("on",
+    !adhoc && (!!state.scopeLibs.length || !!state.scopeTags.length));
   const pend = state.scopeLibs.reduce((n, id) => {
     const l = state.libs.find(x => x.id === id);
     return n + ((l && l.pending_count) || 0);
   }, 0);
-  $("#composer-hint").textContent = adhoc
-    ? "附加文件仅本会话使用、不进入知识库；大文件自动建临时索引。"
-    : "回答只依据勾选库内检索到的资料，逐句带引用；答不了会明说缺什么材料。"
-      + (pend ? ` · 所选库还有 ${pend} 篇正在索引，暂不可检索（已就绪的可正常提问）。` : "");
-  $("#q-input").placeholder = adhoc
-    ? "针对附加文件提问…"
-    : (state.scopeLibs.length ? "提问，将检索上方选中的库…" : "先在左下「📚 选库」勾选检索范围，或直接提问由系统路由…");
+  const hint = $("#composer-hint");
+  if (hint) hint.textContent = adhoc
+    ? "临时文件仅本次使用，不进入知识库"
+    : (pend ? `所选库还有 ${pend} 篇正在索引` : "");
+  const input = $("#q-input");
+  if (input) input.placeholder = adhoc ? "针对文件提问…" : "问点什么…";
 }
 function rmScopeLib(id) { state.scopeLibs = state.scopeLibs.filter(x => x !== id); saveScope(); syncCard(); }
 function rmScopeTag(id) { state.scopeTags = state.scopeTags.filter(x => x !== id); saveScope(); syncCard(); }
@@ -1340,9 +1597,9 @@ function welcomeScreen() {
        "使用手册里有哪些导出方式？", "如果现有系统做不到 X，该怎么改进？"];
   $("#msgs").innerHTML = `
     <div class="welcome">
-      <div class="wl-top"><div class="wl-mark">鉴</div><h2>${adhoc ? "临时资料问答" : "知鉴问答"}</h2></div>
+      <div class="wl-top"><div class="wl-mark">鉴</div><h2>${adhoc ? "临时资料问答" : "今天想了解什么？"}</h2></div>
       <p>${adhoc ? "附加的文件只在本会话使用，不进入知识库；像和助手面对面看材料一样提问。"
-        : "答案基于你勾选的库与标签范围检索，逐句给出出处；查不到会明确说缺什么材料。"}</p>
+        : "从知识、智能体、团队、工作流或 Excel 问数开始；答案会带出处。"}</p>
       <div class="suggests">${hints.map((h, i) => `
         <div class="suggest-card" style="animation-delay:${i * 55}ms" onclick="fillQ('${esc(h)}')">${esc(h)}</div>`).join("")}</div>
     </div>`;
@@ -1614,6 +1871,10 @@ function syncLiveFeedback(shell, live, r) {
 function applyLiveResult(shell, live, r) {
   const cites = live.result.citations || [];
   if (cites.length) renderCites(r.cites, cites);
+  if ((live.result.provenance || []).length) {
+    r.cites.insertAdjacentHTML("beforeend",
+      renderProvenance(live.result.provenance));
+  }
   r.fb.style.display = "flex";
   r.fb.dataset.event = live.qaEvent || live.result.qa_event || "";
   bindFeedback(shell);
@@ -1640,6 +1901,7 @@ async function sendQuestion() {
   if (state.chatMode === "adhoc" && !state.adhocFiles.length && !state.refLibs)
     return toast("请先附加临时文件", "err");
   const wl = $("#msgs .welcome"); if (wl) wl.remove();
+  const cm = $("#chat-main"); if (cm) cm.classList.remove("home");
   state.running = true;
   $("#btn-send").disabled = true;
   msgShell("user", `<div class="row"><div class="bubble">${esc(q)}</div></div>`);
@@ -1657,6 +1919,8 @@ async function sendQuestion() {
     session_id: state.sessionId, library_ids: state.scopeLibs,
     tag_ids: state.scopeTags, adhoc_ids: state.adhocFiles.map(f => f.id),
     ref_library_ids: state.refLibs ? state.scopeLibs : [],
+    skill_ids: window.KP && KP.currentSkillIds ? KP.currentSkillIds() : [],
+    kb_ids: window.KP && KP.currentKBIds ? KP.currentKBIds() : [],
   };
   try {
     await sseStream("/api/qa/stream", reqBody, ev => {
@@ -1787,6 +2051,7 @@ function openSession(id, mode) {
 }
 async function reloadSession() {
   const s = await api(`/api/sessions/${state.sessionId}`);
+  $("#chat-main")?.classList.remove("home");
   $("#msgs").innerHTML = "";
   for (const m of s.messages) {
     if (m.role === "user") msgShell("user", `<div class="row"><div class="bubble">${esc(m.content)}</div></div>`);
@@ -1805,6 +2070,10 @@ async function reloadSession() {
       shell.querySelector(".ans-wrap").innerHTML =
         renderAnswerHTML(m.content, meta.verdict);
       renderCites(shell.querySelector(".citations"), meta.citations || []);
+      if ((meta.provenance || []).length) {
+        shell.querySelector(".citations").insertAdjacentHTML("beforeend",
+          renderProvenance(meta.provenance));
+      }
       const steps = shell.querySelector(".steps");
       if (meta.route && meta.route.docs) {
         const d0 = document.createElement("div"); d0.className = "step";
@@ -1826,10 +2095,21 @@ async function reloadSession() {
 }
 
 /* ══════════ 迷你问答窗（库详情右下 FAB） ══════════ */
+function miniKey() {
+  const sc = state.mini.scope || {};
+  return `${state.mini.libId || ""}|${sc.type || "library"}|${sc.docId || ""}`;
+}
+function defaultMiniScope() {
+  return { type: "library", docId: null, dbId: null, docName: "",
+           page: 0, selection: "", before: "", after: "" };
+}
+function truncateText(s, n) {
+  s = String(s || "").replace(/\s+/g, " ").trim();
+  return s.length > n ? s.slice(0, n) + "…" : s;
+}
 function initMiniChat() {
   $("#kb-fab").onclick = () => {
     const shown = $("#mini-chat").classList.contains("show");
-    // 点击切换：已展开则收起；换库或未展开则打开
     if (shown && state.mini.libId === state.lib) {
       $("#mini-chat").classList.remove("show");
       state.mini.open = false;
@@ -1837,10 +2117,15 @@ function initMiniChat() {
       openMiniFor(state.lib);
     }
   };
-  $("#mc-close").onclick = () => { $("#mini-chat").classList.remove("show"); state.mini.open = false; };
+  $("#mc-close").onclick = () => {
+    $("#mini-chat").classList.remove("show");
+    state.mini.open = false;
+  };
   $("#mc-new").onclick = () => {
-    if (state.mini.libId) delete state.mini.sessions[state.mini.libId];
-    $("#mc-msgs").innerHTML = `<div class="muted" style="text-align:center;padding:20px;font-size:12px">新对话 · 检索范围锁定本库</div>`;
+    if (state.mini.running) return toast("回答中，请稍候", "err");
+    delete state.mini.sessions[miniKey()];
+    miniWelcome();
+    drawMiniScope();
   };
   $("#mc-send").onclick = miniAsk;
   $("#mc-q").addEventListener("keydown", e => {
@@ -1850,26 +2135,179 @@ function initMiniChat() {
     miniAsk();
   });
 }
+function scopePlaceholder() {
+  const sc = state.mini.scope || {};
+  if (sc.type === "selection") return "针对选中片段提问，Enter 发送…";
+  if (sc.type === "document") return `针对《${truncateText(sc.docName, 20)}》提问…`;
+  return "针对本库提问，Enter 发送，Shift+Enter 换行";
+}
+function miniWelcome() {
+  const lib = state.libs.find(l => l.id === state.mini.libId);
+  const sc = state.mini.scope || {};
+  let text;
+  if (sc.type === "selection") {
+    text = `已选中「${esc(truncateText(sc.selection, 60))}」。<br>
+      可直接问“这个数怎么来的”、原文出处或它的含义。`;
+  } else if (sc.type === "document") {
+    text = `针对《${esc(truncateText(sc.docName, 30))}》提问。<br>
+      回答会尽量给出页码与原文；选中正文中的文字可直接问来源。`;
+  } else {
+    text = `直接问答「${esc(lib?.name || "")}」（${lib?.doc_count || 0} 篇）。<br>
+      回答会给出引用；点引用或溯源卡可跳回原文。`;
+  }
+  $("#mc-msgs").innerHTML = `<div class="muted"
+    style="text-align:center;padding:20px;font-size:12px">💬 ${text}</div>`;
+}
+function drawMiniScope() {
+  const lib = state.libs.find(l => l.id === state.mini.libId);
+  const sc = state.mini.scope || {};
+  let html = `<span class="chip ${sc.type === "library" ? "on" : ""}"
+    onclick="setMiniScope('library')">本库：${esc(truncateText(lib?.name || "", 14))}</span>`;
+  if (sc.docId) {
+    html += `<span class="chip ${sc.type === "document" ? "on" : ""}"
+      onclick="setMiniScope('document')">本文档：${esc(truncateText(sc.docName, 16))}</span>`;
+  }
+  if (sc.selection) {
+    html += `<span class="chip on">选中：${esc(truncateText(sc.selection, 16))}
+      <span class="x" onclick="clearMiniSelection()">✕</span></span>`;
+  }
+  $("#mc-scope").innerHTML = html;
+  $("#mc-q").placeholder = scopePlaceholder();
+}
+function setMiniScope(type) {
+  if (state.mini.running) return toast("回答中，请稍候", "err");
+  const sc = state.mini.scope || {};
+  if (type === "library") {
+    state.mini.scope = defaultMiniScope();
+  } else if (type === "document") {
+    if (!sc.docId) return;
+    state.mini.scope = { ...defaultMiniScope(), type: "document",
+      docId: sc.docId, dbId: sc.dbId, docName: sc.docName, page: sc.page };
+  }
+  drawMiniScope();
+  const sid = state.mini.sessions[miniKey()];
+  $("#mc-msgs").innerHTML = "";
+  if (sid) restoreMini(sid); else miniWelcome();
+}
+function clearMiniSelection() {
+  const sc = state.mini.scope || {};
+  if (!sc.docId) return;
+  state.mini.scope = { ...defaultMiniScope(), type: "document",
+    docId: sc.docId, dbId: sc.dbId, docName: sc.docName, page: sc.page };
+  drawMiniScope();
+  const sid = state.mini.sessions[miniKey()];
+  $("#mc-msgs").innerHTML = "";
+  if (sid) restoreMini(sid); else miniWelcome();
+}
 function openMiniFor(lid) {
   const lib = state.libs.find(l => l.id === lid);
   if (!lib) return;
+  if (state.mini.running) return toast("回答中，请稍候", "err");
   state.mini.libId = lid;
+  state.mini.scope = defaultMiniScope();
+  openMiniPanel();
+}
+async function openMiniPanel() {
+  const lib = state.libs.find(l => l.id === state.mini.libId);
+  if (!lib) return;
   state.mini.open = true;
   $("#mc-lib").textContent = lib.name;
   $("#mini-chat").classList.add("show");
-  const box = $("#mc-msgs");
-  ensureScrollGuard(box);
-  // 正在为同一个库流式回答：保留直播 DOM，不能用服务端历史覆盖
-  if (state.mini.running && state.mini.runningLibId === lid) return;
-  const sid = state.mini.sessions[lid];
-  if (!sid) {
-    box.innerHTML = `<div class="muted" style="text-align:center;padding:20px;font-size:12px">
-      💬 直接问答「${esc(lib.name)}」（${lib.doc_count} 篇）。<br>此窗口独立会话，右上角 ✚ 新对话，✕ 关闭。</div>`;
+  drawMiniScope();
+  ensureScrollGuard($("#mc-msgs"));
+  const key = miniKey();
+  if (state.mini.running && state.mini.runningKey === key) return;
+  if (!state.mini.sessions[key]) {
+    try {
+      const rows = await api(`/api/spaces/${state.space}/sessions?mode=kb`);
+      const sc = state.mini.scope || {};
+      const match = rows.find(s => {
+        let x = {};
+        try { x = JSON.parse(s.scope || "{}"); } catch (e) { return false; }
+        if (!x.panel) return false;
+        if (!(x.library_ids || []).includes(state.mini.libId)) return false;
+        const ds = x.doc_ids || [];
+        if (sc.docId) return ds.includes(sc.docId);
+        return ds.length === 0 && sc.type === "library";
+      });
+      if (match) state.mini.sessions[key] = match.id;
+    } catch (e) {}
+  }
+  if (miniKey() !== key) return;
+  const sid = state.mini.sessions[key];
+  $("#mc-msgs").innerHTML = "";
+  if (sid) restoreMini(sid); else miniWelcome();
+}
+function askDocument() {
+  const d = state.drawer.doc;
+  if (!d) return;
+  state.mini.libId = d.library_id;
+  state.mini.scope = { ...defaultMiniScope(), type: "document",
+    docId: d.doc_id, dbId: d.id, docName: d.name,
+    page: state.drawer.page || 1 };
+  closeDrawer();
+  openMiniPanel();
+}
+function askSelection(action) {
+  const ctx = state._selContext;
+  const d = state.drawer.doc;
+  if (!ctx || !d) return toast("请先在文档正文中选中内容", "err");
+  state.mini.libId = d.library_id;
+  state.mini.scope = { type: "selection", docId: d.doc_id, dbId: d.id,
+    docName: d.name, page: ctx.page || (state.drawer.page || 1),
+    selection: ctx.text, before: ctx.before, after: ctx.after };
+  $("#sel-toolbar").classList.remove("show");
+  closeDrawer();
+  openMiniPanel();
+  if (action === "why") {
+    $("#mc-q").value = "这个数怎么来的？请给出计算依据或原文出处。";
+    miniAsk();
   } else {
-    restoreMini(lid, sid);
+    $("#mc-q").focus();
   }
 }
-async function restoreMini(lid, sid) {
+function initSelectionToolbar() {
+  const tb = $("#sel-toolbar");
+  document.addEventListener("mouseup", e => {
+    if (e.target.closest("#sel-toolbar")) return;
+    setTimeout(() => {
+      const sel = window.getSelection();
+      const text = sel ? String(sel).trim() : "";
+      const pg = $("#pg-body");
+      if (!pg || !text || !sel.rangeCount
+          || !pg.contains(sel.anchorNode) || !pg.contains(sel.focusNode)) {
+        tb.classList.remove("show");
+        return;
+      }
+      const full = pg.textContent || "";
+      const idx = full.indexOf(text);
+      state._selContext = {
+        text: text.slice(0, 500),
+        page: state.drawer.page || 1,
+        before: idx >= 0 ? full.slice(Math.max(0, idx - 300), idx) : "",
+        after: idx >= 0 ? full.slice(idx + text.length,
+                                     idx + text.length + 300) : "",
+      };
+      const r = sel.getRangeAt(0).getBoundingClientRect();
+      tb.style.left = Math.min(window.innerWidth - 250,
+                               Math.max(10, r.left)) + "px";
+      tb.style.top = Math.max(70, r.top - 46) + "px";
+      tb.classList.add("show");
+    }, 0);
+  });
+  tb.querySelectorAll("button").forEach(b => b.onclick =
+    () => askSelection(b.dataset.act));
+  document.addEventListener("mousedown", e => {
+    if (!e.target.closest("#sel-toolbar")) tb.classList.remove("show");
+  });
+}
+function miniCitesHTML(cites) {
+  if (!cites || !cites.length) return "";
+  return `<div class="mc-meta" onclick="this.nextElementSibling.style.display=this.nextElementSibling.style.display==='none'?'':'none'">引用 ${cites.length} 处 ▾</div>
+    <div class="mc-cites" style="font-size:11px;color:var(--text-3);display:none;margin-top:4px">
+    ${cites.map(c => `· ${esc(c.doc_name)} p${c.page}`).join("<br>")}</div>`;
+}
+async function restoreMini(sid) {
   const box = $("#mc-msgs");
   try {
     const s = await api(`/api/sessions/${sid}`);
@@ -1882,22 +2320,15 @@ async function restoreMini(lid, sid) {
       else {
         const meta = m.meta || {};
         b.innerHTML = `${renderAnswerHTML(m.content, meta.verdict, true)}
-          <div class="mc-meta">引用 ${((meta.citations || []).length)} 处${(meta.citations || []).length ? " ▾" : ""}</div>`;
-        const cites = meta.citations || [];
-        if (cites.length) {
-          const li = document.createElement("div");
-          li.style.cssText = "font-size:11px;color:var(--text-3);display:none;margin-top:4px";
-          li.innerHTML = cites.map(c => `· ${esc(c.doc_name)} p${c.page}`).join("<br>");
-          b.appendChild(li);
-          b.querySelector(".mc-meta").onclick = () => li.style.display = li.style.display === "none" ? "" : "none";
-        }
+          ${miniCitesHTML(meta.citations || [])}
+          ${renderProvenance(meta.provenance || [], true)}`;
       }
       box.appendChild(b);
     }
     box.scrollTop = box.scrollHeight;
   } catch (e) {
-    delete state.mini.sessions[lid];
-    box.innerHTML = `<div class="muted" style="text-align:center;padding:20px;font-size:12px">新对话 · 检索范围锁定本库</div>`;
+    delete state.mini.sessions[miniKey()];
+    miniWelcome();
   }
 }
 async function miniAsk() {
@@ -1905,12 +2336,15 @@ async function miniAsk() {
   if (!q || state.mini.running) return;
   state.mini.running = true;
   state.mini.runningLibId = state.mini.libId;
+  const key = miniKey();
+  state.mini.runningKey = key;
   $("#mc-send").disabled = true;
   const box = $("#mc-msgs");
   ensureScrollGuard(box);
   box._paused = false;
   const tip = box.querySelector(".muted"); if (tip) tip.remove();
-  const u = document.createElement("div"); u.className = "m u"; u.textContent = q;
+  const u = document.createElement("div"); u.className = "m u";
+  u.textContent = q;
   box.appendChild(u);
   const a = document.createElement("div"); a.className = "m a";
   a.innerHTML = `<span class="pulse"></span> 检索中…`;
@@ -1918,14 +2352,21 @@ async function miniAsk() {
   box.scrollTop = box.scrollHeight;
   $("#mc-q").value = "";
   let acc = "";
+  const sc = state.mini.scope || {};
   const reqBody = {
-    space_id: state.space, mode: "kb", question: q,
-    session_id: state.mini.sessions[state.mini.libId] || null,
+    space_id: state.space, mode: "kb", question: q, panel: true,
+    session_id: state.mini.sessions[key] || null,
     library_ids: [state.mini.libId], tag_ids: [],
+    doc_ids: sc.docId ? [sc.docId] : [],
+    focus: sc.type === "selection" ? {
+      document_id: sc.docId, db_id: sc.dbId, page: sc.page,
+      selection_text: sc.selection, selection_before: sc.before,
+      selection_after: sc.after,
+    } : null,
   };
   try {
     await sseStream("/api/qa/stream", reqBody, ev => {
-      if (ev.type === "start") state.mini.sessions[state.mini.libId] = ev.session_id;
+      if (ev.type === "start") state.mini.sessions[key] = ev.session_id;
       else if (ev.type === "answer") {
         acc += ev.delta;
         const follow = canFollow(box);
@@ -1933,17 +2374,10 @@ async function miniAsk() {
         if (follow) box.scrollTop = box.scrollHeight;
       } else if (ev.type === "result") {
         const finalText = ev.answer || acc;
-        const cites = ev.citations || [];
         const follow = canFollow(box);
         a.innerHTML = `${renderAnswerHTML(finalText, ev.verdict, true)}
-          <div class="mc-meta">引用 ${cites.length} 处${cites.length ? " ▾" : ""}</div>`;
-        if (cites.length) {
-          const li = document.createElement("div");
-          li.style.cssText = "font-size:11px;color:var(--text-3);display:none;margin-top:4px";
-          li.innerHTML = cites.map(c => `· ${esc(c.doc_name)} p${c.page}`).join("<br>");
-          a.appendChild(li);
-          a.querySelector(".mc-meta").onclick = () => li.style.display = li.style.display === "none" ? "" : "none";
-        }
+          ${miniCitesHTML(ev.citations || [])}
+          ${renderProvenance(ev.provenance || [], true)}`;
         if (follow) box.scrollTop = box.scrollHeight;
       } else if (ev.type === "error") {
         a.innerHTML = `<span style="color:var(--error)">${esc(ev.message)}</span>`;
@@ -1954,6 +2388,7 @@ async function miniAsk() {
   }
   state.mini.running = false;
   state.mini.runningLibId = null;
+  state.mini.runningKey = null;
   $("#mc-send").disabled = false;
   loadHistory();
 }

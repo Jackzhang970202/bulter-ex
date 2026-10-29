@@ -65,6 +65,7 @@ CREATE TABLE IF NOT EXISTS messages(
 CREATE TABLE IF NOT EXISTS qa_events(
   id TEXT PRIMARY KEY, session_id TEXT, space_id TEXT, question TEXT,
   answer TEXT, verdict TEXT, citations JSON DEFAULT '[]',
+  provenance JSON DEFAULT '[]',
   feedback TEXT DEFAULT '', correction TEXT DEFAULT '', created_at TEXT);
 CREATE TABLE IF NOT EXISTS candidates(
   id TEXT PRIMARY KEY, space_id TEXT NOT NULL, kind TEXT NOT NULL,
@@ -133,6 +134,10 @@ def init():
                       ("dedup_key", "TEXT DEFAULT ''")):
         if name not in rcols:
             c.execute(f"ALTER TABLE rules ADD COLUMN {name} {ddl}")
+    ecols = {r[1] for r in c.execute("PRAGMA table_info(qa_events)")}
+    if "provenance" not in ecols:
+        c.execute("ALTER TABLE qa_events ADD COLUMN provenance JSON "
+                  "DEFAULT '[]'")
     c.commit()
 
 
